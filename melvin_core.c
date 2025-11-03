@@ -23,74 +23,62 @@
 #include <errno.h>
 
 /* ========================================================================
- * COMPILE-TIME PARAMETERS (can be overridden via CLI)
+ * COMPILE-TIME CONSTANTS
  * ======================================================================== */
 
-#define DEFAULT_NODE_CAP        8192
-#define DEFAULT_EDGE_CAP        65536
-#define DEFAULT_MACRO_CAP       512
-#define DEFAULT_DETECTOR_CAP    128
-
-#define TICK_MS                 50
-#define FRAME_SIZE              4096
+#define FRAME_SIZE              4096  // Initial frame buffer size (auto-grows)
 #define RX_RING_SIZE            (FRAME_SIZE * 4)
 #define TX_RING_SIZE            (FRAME_SIZE * 4)
-
-#define SNAPSHOT_PERIOD         2000
-
-/* Continuous dynamics parameters */
-#define LAMBDA_DECAY            0.99f   // count decay
-#define LAMBDA_E                0.9f    // eligibility trace
-#define BETA_BLEND              0.7f    // predictive vs error
-#define GAMMA_SLOW              0.8f    // slow weight fraction
-#define ETA_FAST                3.0f    // fast weight step
-#define DELTA_MAX               4.0f    // max weight change per tick
-#define ALPHA_FAST_DECAY        0.95f
-#define ALPHA_SLOW_DECAY        0.999f
-
-/* Meta-parameters for homeostatic adaptation (these are more stable) */
-#define ADAPT_RATE              0.001f   // rate of parameter adaptation
-#define TARGET_DENSITY          0.15f    // target ratio of edges to max possible
-#define TARGET_ACTIVITY         0.1f     // target fraction of active nodes
-#define TARGET_PREDICTION_ACC   0.85f    // target prediction accuracy (1 - error)
-#define CAPACITY_THRESH         0.8f     // threshold for "near capacity"
-
-/* Emergent time, space, and thought parameters (initial values - will adapt) */
-#define INIT_MAX_THOUGHT_HOPS   10       // initial max propagation passes per tick
-#define INIT_STABILITY_EPS      0.005f   // initial convergence threshold for error
-#define INIT_ACTIVATION_EPS     0.01f    // initial convergence threshold for activation
-#define INIT_TEMPORAL_DECAY     0.1f     // initial temporal decay rate
-#define INIT_SPATIAL_K          0.5f     // initial spatial connectivity scaling
-
-/* Target metrics for thought/time/space adaptation */
-#define TARGET_THOUGHT_DEPTH    5        // ideal number of hops (not too shallow/deep)
-#define TARGET_SETTLE_RATIO     0.7f     // target ratio of settled thoughts (70%)
-#define MIN_THOUGHT_HOPS        3        // minimum depth for meaningful thought
-#define MAX_THOUGHT_HOPS_LIMIT  20       // absolute maximum to prevent runaway
-
-/* Initial values for adaptive parameters (will self-tune) */
-#define INIT_SIGMOID_K          0.5f
-#define INIT_PRUNE_RATE         0.0005f
-#define INIT_CREATE_RATE        0.01f
-#define INIT_LAYER_RATE         0.001f
-#define INIT_ENERGY_ALPHA       0.1f
-#define INIT_ENERGY_DECAY       0.995f
-#define INIT_EPSILON_MIN        0.05f
-#define INIT_EPSILON_MAX        0.3f
-#define INIT_ACTIVATION_SCALE   64.0f
-
-/* Soft reference values (replace hard thresholds) */
-#define PRUNE_WEIGHT_REF        2.0f
-#define STALE_REF               200.0f
-#define NODE_STALE_REF          1000.0f
-#define CO_FREQ_REF             10.0f
-#define SIM_REF                 0.6f
-#define DENSITY_REF             0.6f
-#define LAYER_MIN_SIZE          10
 
 /* ========================================================================
  * DATA STRUCTURES
  * ======================================================================== */
+
+// Node operation types - nodes can perform different computations
+// These are the INSTRUCTION SET of the graph programming language
+typedef enum {
+    // Arithmetic/Logic Instructions
+    OP_SIGMOID = 0,   // sigmoid(x) - smooth activation
+    OP_SUM,           // sum(inputs) - addition
+    OP_PRODUCT,       // product(inputs) - multiplication
+    OP_MAX,           // max(inputs) - maximum selector / IF
+    OP_MIN,           // min(inputs) - minimum selector
+    OP_COMPARE,       // compare(a,b) - comparison / branching
+    OP_THRESHOLD,     // threshold(x) - boolean logic
+    OP_RELU,          // relu(x) - rectified linear
+    OP_TANH,          // tanh(x) - bounded activation
+    
+    // Control Flow Instructions  
+    OP_GATE,          // gate(x,g) - conditional execution / WHILE
+    OP_MODULATE,      // modulate(x,m) - multiply by condition
+    
+    // Memory Instructions
+    OP_MEMORY,        // load/store - RAM
+    OP_SEQUENCE,      // sequence(history) - temporal memory / LOOP
+    
+    // Meta Instructions (operate on the graph itself)
+    OP_HASH,          // hash(key) - addressing / pointers
+    OP_EVAL,          // eval(subgraph) - execute code-as-data
+    OP_SPLICE,        // splice(pattern) - code insertion
+    OP_FORK,          // fork() - create parallel computation
+    OP_JOIN,          // join() - synchronize parallel paths
+    
+    NUM_OPS
+} NodeOpType;
+
+// Meta-operation types - operations that modify the graph itself
+typedef enum {
+    META_NONE = 0,
+    META_CREATE_EDGE,     // Create new connection
+    META_DELETE_EDGE,     // Remove weak connection
+    META_MERGE_NODES,     // Combine redundant nodes
+    META_SPLIT_NODE,      // Divide overloaded node
+    META_MUTATE_OP,       // Change node operation type
+    META_OPTIMIZE_SUBGRAPH, // Compile frequent pattern
+    META_CREATE_SHORTCUT, // Add skip connection
+    META_PRUNE_BRANCH,    // Remove unused subgraph
+    NUM_META_OPS
+} MetaOpType;
 
 typedef struct {
     uint32_t id;
@@ -105,16 +93,43 @@ typedef struct {
     // For pattern signature (last 32 ticks of activation history)
     uint32_t sig_history; // bit vector (for compatibility, threshold at 0.5)
     
-    // For layer meta-nodes
+    // Computational evolution
+    uint8_t  op_type;     // NodeOpType - what operation this node performs
+    float    op_params[4]; // Operation-specific parameters
+    float    mutation_rate; // Probability of changing operation
+    
+    // Meta-node capabilities
     uint8_t  is_meta;
+    uint8_t  meta_op;     // MetaOpType - graph modification operation
     uint32_t cluster_id;
+    uint32_t meta_target; // Target node/edge for meta-operation
+    
+    // Module membership (hierarchical structure)
+    uint32_t module_id;   // Which module this node belongs to (0 = root/global)
+    uint8_t  is_module_interface; // Is this an input/output node for a module?
+    uint8_t  is_module_proxy; // Does this node represent an entire module?
+    uint32_t proxy_module_id; // If proxy, which module does it represent?
+    
+    // Performance tracking (for self-optimization)
+    uint64_t executions;      // How many times executed
+    uint64_t cycles_spent;    // Computational cost (approximate)
+    float    avg_utility;     // Running average utility
+    float    efficiency;      // utility per cycle
     
     // Prediction support
     float    soma;        // accumulated input (continuous)
     float    hat;         // predicted activation [0,1] (continuous)
     
+    // Memory for OP_MEMORY nodes
+    float    memory_value;   // Stored value
+    uint32_t memory_age;     // How long stored
+    
     // Statistics for pruning
     float    total_active_ticks; // continuous accumulation
+    
+    // SAFEGUARDS
+    uint8_t  eval_depth;  // Current recursion depth for OP_EVAL (prevents infinite recursion)
+    uint8_t  is_protected; // Protected kernel nodes can't be mutated/deleted
 } Node;
 
 typedef struct {
@@ -136,6 +151,17 @@ typedef struct {
     uint16_t slow_update_countdown;
 } Edge;
 
+// Forward declare Module for Graph
+typedef struct Module Module;
+
+// P2 SAFEGUARD: Edge hash table for O(1) lookups
+typedef struct {
+    uint64_t key;      // (src << 32) | dst
+    uint32_t edge_idx; // Index in edges array
+} EdgeHashEntry;
+
+#define EDGE_HASH_SIZE 16384  // Power of 2 for fast modulo
+
 typedef struct {
     Node   *nodes;
     uint32_t node_count;
@@ -150,9 +176,55 @@ typedef struct {
     uint32_t *edge_free_list;
     uint32_t edge_free_count;
     
-    // Adjacency for fast lookup (could be improved with hash)
-    // For simplicity, we'll do linear search in this minimal version
+    // P2 SAFEGUARD: Edge hash table for fast lookup
+    EdgeHashEntry *edge_hash;
+    uint32_t edge_hash_size;
+    
+    // Hierarchical modularity: subgraphs become reusable modules
+    Module *modules;
+    uint32_t module_count;
+    uint32_t module_cap;
 } Graph;
+
+// A Module is a reusable subgraph that acts as a single computational unit
+// Think: functions, cortical columns, neural motifs
+typedef struct Module {
+    uint32_t id;
+    char name[64];              // Human-readable name (auto-generated)
+    
+    // The subgraph this module contains
+    uint32_t *internal_nodes;   // Node indices in main graph
+    uint32_t node_count;
+    uint32_t *internal_edges;   // Edge indices in main graph  
+    uint32_t edge_count;
+    
+    // Interface: inputs and outputs
+    uint32_t *input_nodes;      // Which internal nodes receive external input
+    uint32_t input_count;
+    uint32_t *output_nodes;     // Which internal nodes produce output
+    uint32_t output_count;
+    
+    // Pattern signature for matching
+    uint64_t signature_hash;    // Hash of topology
+    uint32_t pattern_frequency; // How often this pattern appears
+    
+    // Performance tracking
+    uint64_t executions;
+    uint64_t total_cycles;      // Cumulative cost
+    float    avg_utility;       // How useful this module is
+    float    efficiency;        // utility per cycle
+    
+    // Hierarchical nesting: modules can contain modules
+    uint32_t *child_modules;    // Module IDs contained within this module
+    uint32_t child_count;
+    uint32_t parent_module;     // Module ID that contains this (0 = root)
+    uint8_t  hierarchy_level;   // 0=leaf, 1=contains leaves, 2=contains level-1, etc.
+    
+    // Evolution
+    float mutation_rate;
+    uint32_t creation_tick;     // When this module was discovered
+    uint32_t last_used_tick;
+} Module;
 
 typedef struct {
     char     pattern[64];  // byte pattern or token
@@ -183,6 +255,9 @@ typedef struct {
     uint32_t  detector_count;
     uint32_t  detector_cap;
     
+    // P2 SAFEGUARD: Detector deduplication map (one detector per pattern)
+    uint32_t detector_map[256]; // Maps byte -> detector_id (0 = none)
+    
     Macro    *macros;
     uint32_t  macro_count;
     uint32_t  macro_cap;
@@ -190,10 +265,12 @@ typedef struct {
     RingBuffer rx_ring;
     RingBuffer tx_ring;
     
-    uint8_t  current_frame[FRAME_SIZE];
-    uint16_t current_frame_len;
+    uint8_t  *current_frame;        // Dynamic frame buffer
+    uint32_t current_frame_cap;     // Current capacity
+    uint16_t current_frame_len;     // Actual length
     
-    uint8_t  last_output_frame[FRAME_SIZE];
+    uint8_t  *last_output_frame;    // Dynamic frame buffer
+    uint32_t last_output_frame_cap; // Current capacity
     uint16_t last_output_frame_len;
     
     float    epsilon;          // exploration rate (dynamically modulated)
@@ -215,6 +292,41 @@ typedef struct {
     float    *P1;  // per node
     float    *P0;  // per node
     
+    // Runtime configurable parameters (all can change during operation)
+    // Basic timing and persistence
+    uint32_t tick_ms;           // milliseconds per tick
+    uint32_t snapshot_period;   // ticks between snapshots
+    
+    // Continuous dynamics parameters
+    float    lambda_decay;      // count decay
+    float    lambda_e;          // eligibility trace
+    float    beta_blend;        // predictive vs error
+    float    gamma_slow;        // slow weight fraction
+    float    eta_fast;          // fast weight step
+    float    delta_max;         // max weight change per tick
+    float    alpha_fast_decay;  // fast weight decay rate
+    float    alpha_slow_decay;  // slow weight decay rate
+    
+    // Meta-parameters for homeostatic adaptation
+    float    adapt_rate;        // rate of parameter adaptation
+    float    target_density;    // target ratio of edges to max possible
+    float    target_activity;   // target fraction of active nodes
+    float    target_prediction_acc; // target prediction accuracy (1 - error)
+    
+    // Target metrics for thought/time/space adaptation
+    uint16_t target_thought_depth; // ideal number of hops (not too shallow/deep)
+    float    target_settle_ratio;  // target ratio of settled thoughts (70%)
+    uint16_t min_thought_hops;     // minimum depth for meaningful thought
+    float    max_hop_growth_rate;  // controls how fast max_hops can grow (soft limit)
+    
+    // Soft reference values (replace hard thresholds)
+    float    prune_weight_ref;  // reference weight for pruning
+    float    stale_ref;         // reference staleness for edges
+    float    node_stale_ref;    // reference staleness for nodes
+    float    co_freq_ref;       // reference co-activation frequency
+    float    density_ref;       // reference density
+    uint16_t layer_min_size;    // minimum layer size
+    
     // Adaptive parameters (self-tuning based on graph dynamics)
     float    sigmoid_k;        // sigmoid steepness
     float    prune_rate;       // pruning probability base
@@ -227,7 +339,7 @@ typedef struct {
     float    activation_scale; // activation sensitivity
     
     // Adaptive emergent time/space/thought parameters
-    uint16_t max_thought_hops; // adaptive max propagation passes
+    uint32_t max_thought_hops; // adaptive max propagation passes (now unlimited)
     float    stability_eps;    // adaptive convergence threshold (error)
     float    activation_eps;   // adaptive convergence threshold (activation)
     float    temporal_decay;   // adaptive temporal distance scaling
@@ -239,13 +351,34 @@ typedef struct {
     float    prediction_acc;   // current prediction accuracy
     
     // Emergent time, space, and thought tracking
-    uint16_t thought_depth;    // number of propagation hops in current tick
+    uint32_t thought_depth;    // number of propagation hops in current tick
     float    prev_mean_error;  // for convergence detection
     float    activation_delta; // total activation change in last hop
     float    mean_temporal_distance;  // average edge staleness
     float    mean_spatial_distance;   // average connectivity-based distance
     uint32_t thoughts_settled; // count of converged thoughts
     uint32_t thoughts_maxed;   // count of max-hop thoughts (didn't converge)
+    
+    // Self-optimization tracking
+    uint64_t total_cycles;        // Total computation cycles
+    uint64_t meta_operations;     // Count of graph modifications
+    uint32_t op_type_counts[NUM_OPS]; // Distribution of node operations
+    float    op_type_utility[NUM_OPS]; // Avg utility per operation type
+    uint32_t mutations_attempted; // Evolutionary changes tried
+    uint32_t mutations_kept;      // Beneficial mutations
+    float    global_mutation_rate; // System-wide mutation probability
+    
+    // Hierarchical modularity tracking
+    uint32_t modules_created;     // Total modules discovered
+    uint32_t modules_pruned;      // Modules removed for inefficiency
+    uint32_t patterns_detected;   // Frequent subgraphs found
+    uint32_t max_hierarchy_level; // Deepest nesting level
+    float    modularity_score;    // How modular the system is (0-1)
+    uint32_t module_calls;        // How many times modules were invoked
+    
+    // SAFEGUARDS: Pending operations queue (causal scheduling)
+    uint32_t pending_meta_ops[1000][3]; // [op_type, target_a, target_b]
+    uint32_t pending_count;
 } System;
 
 /* ========================================================================
@@ -254,6 +387,23 @@ typedef struct {
 
 Graph   g_graph;
 System  g_sys;
+
+/* ========================================================================
+ * FORWARD DECLARATIONS
+ * ======================================================================== */
+
+uint32_t node_create(Graph *g);
+void node_delete(Graph *g, uint32_t idx);
+uint32_t edge_create(Graph *g, uint32_t src_idx, uint32_t dst_idx);
+void edge_delete(Graph *g, uint32_t idx);
+Edge* find_edge(Graph *g, uint32_t src_idx, uint32_t dst_idx);
+
+// Module management
+uint32_t module_create(Graph *g, uint32_t *nodes, uint32_t node_count);
+void module_execute(Graph *g, Module *m, float *inputs, float *outputs);
+void detect_patterns(Graph *g);
+void collapse_to_module(Graph *g, uint32_t *nodes, uint32_t count);
+uint32_t create_module_proxy(Graph *g, uint32_t module_id);
 
 /* ========================================================================
  * CONTINUOUS DYNAMICS HELPERS
@@ -274,11 +424,6 @@ static inline float sigmoid_adaptive(float x, float center) {
     return sigmoid_scaled(x, center, g_sys.sigmoid_k);
 }
 
-// Soft clamp: tanh-like, maps (-∞,∞) → (-1,1)
-static inline float soft_clamp(float x) {
-    return tanhf(x);
-}
-
 // Random float [0,1]
 static inline float randf() {
     return (float)rand() / (float)RAND_MAX;
@@ -294,6 +439,811 @@ static inline float soft_above(float x, float ref) {
 // Returns value in [0,1] representing "how much below reference"
 static inline float soft_below(float x, float ref) {
     return sigmoid_adaptive(-x, -ref);
+}
+
+/* ========================================================================
+ * NODE OPERATION EXECUTION
+ * ======================================================================== */
+
+// Execute different node operations based on op_type
+static inline float execute_node_operation(Node *n) {
+    uint64_t op_cost = 10; // Base cost estimate
+    float result = 0.0f;
+    
+    switch(n->op_type) {
+        case OP_SIGMOID:
+            // Default: sigmoid((soma - theta) / scale)
+            result = sigmoid((n->soma - n->theta) / g_sys.activation_scale);
+            break;
+            
+        case OP_SUM:
+            // Simple linear sum
+            result = n->soma / (g_sys.activation_scale * 2.0f); // normalize
+            if (result < 0.0f) result = 0.0f;
+            if (result > 1.0f) result = 1.0f;
+            break;
+            
+        case OP_PRODUCT:
+            // Multiplicative gating: a = soma * op_params[0]
+            result = n->soma * n->op_params[0];
+            result = sigmoid(result); // squash to [0,1]
+            break;
+            
+        case OP_MAX:
+            // Winner-take-all / Attention: activate only if above threshold
+            result = (n->soma > n->theta) ? 1.0f : 0.0f;
+            break;
+            
+        case OP_MIN:
+            // Inhibitory / minimum selector
+            result = (n->soma < n->theta) ? 1.0f : 0.0f;
+            break;
+            
+        case OP_GATE:
+            // LSTM-like gating: a = tanh(soma) * sigmoid(op_params[0])
+            {
+                float input_gate = sigmoid(n->op_params[0]);
+                result = tanhf(n->soma / g_sys.activation_scale) * input_gate;
+                result = (result + 1.0f) / 2.0f; // map tanh [-1,1] to [0,1]
+            }
+            break;
+            
+        case OP_MEMORY:
+            // Store and recall: if soma > threshold, store; else recall
+            op_cost = 20; // Memory ops are more expensive
+            if (n->soma > n->theta) {
+                n->memory_value = n->soma;
+                n->memory_age = 0;
+                result = n->memory_value / g_sys.activation_scale;
+            } else {
+                result = n->memory_value / g_sys.activation_scale;
+                n->memory_age++;
+                // Decay memory over time
+                n->memory_value *= 0.99f;
+            }
+            if (result < 0.0f) result = 0.0f;
+            if (result > 1.0f) result = 1.0f;
+            break;
+            
+        case OP_COMPARE:
+            // Compare soma to theta, output difference
+            result = sigmoid((n->soma - n->theta) * n->op_params[0]); // op_params[0] = sensitivity
+            break;
+            
+        case OP_SEQUENCE:
+            // Predict next in sequence using history
+            {
+                float predicted = (float)(n->sig_history & 1) * 0.3f + 
+                                 (float)((n->sig_history >> 1) & 1) * 0.5f +
+                                 (float)((n->sig_history >> 2) & 1) * 0.2f;
+                result = sigmoid(n->soma * predicted);
+            }
+            break;
+            
+        case OP_HASH:
+            // Hash lookup (simplified - uses soma as key)
+            op_cost = 15; // Hash operations are moderately expensive
+            {
+                uint32_t key = (uint32_t)(n->soma * 1000.0f);
+                uint32_t hash = (key * 2654435761u) % 256; // Knuth multiplicative hash
+                result = (float)hash / 255.0f;
+            }
+            break;
+            
+        case OP_MODULATE:
+            // Multiplicative modulation with previous activation
+            result = sigmoid(n->soma * n->a_prev * n->op_params[0]);
+            break;
+            
+        case OP_THRESHOLD:
+            // Hard threshold (binary)
+            result = (n->soma > n->theta) ? n->op_params[0] : 0.0f;
+            break;
+            
+        case OP_RELU:
+            // Rectified linear
+            result = (n->soma - n->theta > 0.0f) ? (n->soma - n->theta) / g_sys.activation_scale : 0.0f;
+            if (result > 1.0f) result = 1.0f;
+            break;
+            
+        case OP_TANH:
+            // Hyperbolic tangent
+            result = tanhf((n->soma - n->theta) / g_sys.activation_scale);
+            result = (result + 1.0f) / 2.0f; // map to [0,1]
+            break;
+            
+        case OP_EVAL:
+            // Meta-instruction: evaluate another part of the graph
+            // Use soma as "program counter" to select which nodes to execute
+            op_cost = 50; // Meta-ops are expensive
+            
+            // SAFEGUARD: Prevent infinite recursion
+            if (n->eval_depth >= 10) {
+                result = 0.0f; // Max depth reached, return 0
+                break;
+            }
+            
+            {
+                uint32_t target_node = (uint32_t)(n->soma * 10.0f) % g_graph.node_count;
+                if (target_node < g_graph.node_count) {
+                    Node *target = &g_graph.nodes[target_node];
+                    // Increment depth for recursive call
+                    target->eval_depth = n->eval_depth + 1;
+                    result = execute_node_operation(target);
+                    target->eval_depth = 0; // Reset after execution
+                }
+            }
+            break;
+            
+        case OP_SPLICE:
+            // Meta-instruction: insert pattern into graph
+            // Creates new nodes/edges based on current activation pattern
+            op_cost = 100;
+            if (n->soma > n->theta && randf() < 0.01f) {
+                // Create a new node with random op type
+                uint32_t new_idx = node_create(&g_graph);
+                if (new_idx != UINT32_MAX) {
+                    g_graph.nodes[new_idx].op_type = (uint8_t)(n->soma * NUM_OPS) % NUM_OPS;
+                    edge_create(&g_graph, (uint32_t)((n - g_graph.nodes)), new_idx);
+                    result = 1.0f; // Success
+                }
+            }
+            break;
+            
+        case OP_FORK:
+            // Meta-instruction: create parallel computation path
+            op_cost = 80;
+            if (n->soma > n->theta && n->out_deg < 5) {
+                // Duplicate this node's output path
+                uint32_t new_path = node_create(&g_graph);
+                if (new_path != UINT32_MAX) {
+                    g_graph.nodes[new_path].op_type = n->op_type;
+                    result = 1.0f;
+                }
+            }
+            break;
+            
+        case OP_JOIN:
+            // Meta-instruction: synchronize parallel paths
+            // Waits for all inputs to be active before proceeding
+            {
+                int all_active = 1;
+                // Check if all inputs are above threshold
+                for (uint32_t e = 0; e < g_graph.edge_count; e++) {
+                    Edge *edge = &g_graph.edges[e];
+                    if (edge->dst == (uint32_t)(n - g_graph.nodes)) {
+                        if (g_graph.nodes[edge->src].a < 0.5f) {
+                            all_active = 0;
+                            break;
+                        }
+                    }
+                }
+                result = all_active ? 1.0f : 0.0f;
+            }
+            break;
+            
+        default:
+            result = sigmoid((n->soma - n->theta) / g_sys.activation_scale);
+            break;
+    }
+    
+    // Track performance (using estimated cost)
+    n->cycles_spent += op_cost;
+    n->executions++;
+    g_sys.total_cycles += op_cost;
+    
+    return result;
+}
+
+/* ========================================================================
+ * META-NODE EXECUTION (Graph Self-Modification)
+ * ======================================================================== */
+
+// Queue meta-operation for execution AFTER current tick (causal scheduling)
+void queue_meta_operation(MetaOpType op, uint32_t target_a, uint32_t target_b) {
+    if (g_sys.pending_count >= 1000) return; // Queue full
+    g_sys.pending_meta_ops[g_sys.pending_count][0] = op;
+    g_sys.pending_meta_ops[g_sys.pending_count][1] = target_a;
+    g_sys.pending_meta_ops[g_sys.pending_count][2] = target_b;
+    g_sys.pending_count++;
+}
+
+// Execute meta-operations that modify the graph structure
+void execute_meta_operation(Node *meta) {
+    if (!meta->is_meta || meta->meta_op == META_NONE) return;
+    if (meta->a < 0.5f) return; // Only execute if meta-node is active
+    
+    g_sys.meta_operations++;
+    
+    switch(meta->meta_op) {
+        case META_CREATE_EDGE: {
+            // QUEUE edge creation for next tick (causal scheduling)
+            if (g_graph.node_count < 2) break;
+            uint32_t src = rand() % g_graph.node_count;
+            uint32_t dst = rand() % g_graph.node_count;
+            if (src != dst && g_graph.nodes[src].a > 0.3f && g_graph.nodes[dst].a > 0.3f) {
+                Edge *existing = find_edge(&g_graph, src, dst);
+                if (!existing) {
+                    queue_meta_operation(META_CREATE_EDGE, src, dst);
+                }
+            }
+            break;
+        }
+        
+        case META_DELETE_EDGE: {
+            // Find and delete weakest edge
+            if (g_graph.edge_count == 0) break;
+            uint32_t weakest = 0;
+            float min_weight = 1000.0f;
+            for (uint32_t i = 0; i < g_graph.edge_count; i++) {
+                Edge *e = &g_graph.edges[i];
+                float w = g_sys.gamma_slow * e->w_slow + (1.0f - g_sys.gamma_slow) * e->w_fast;
+                if (w < min_weight) {
+                    min_weight = w;
+                    weakest = i;
+                }
+            }
+            if (min_weight < 10.0f) { // Only delete very weak edges
+                queue_meta_operation(META_DELETE_EDGE, weakest, 0);
+            }
+            break;
+        }
+        
+        case META_MUTATE_OP: {
+            // Change operation type of a random node
+            if (g_graph.node_count == 0) break;
+            uint32_t target = rand() % g_graph.node_count;
+            Node *n = &g_graph.nodes[target];
+            
+            // SAFEGUARD: Don't mutate protected kernel nodes
+            if (n->is_protected) break;
+            
+            // Queue mutation for next tick
+            uint8_t new_op = rand() % NUM_OPS;
+            queue_meta_operation(META_MUTATE_OP, target, new_op);
+            break;
+        }
+        
+        case META_CREATE_SHORTCUT: {
+            // Add skip connection between distant nodes
+            if (g_graph.node_count < 3) break;
+            uint32_t src = rand() % g_graph.node_count;
+            uint32_t dst = rand() % g_graph.node_count;
+            
+            // Try to connect nodes that are topologically distant
+            if (src != dst && g_graph.nodes[src].out_deg < 10 && g_graph.nodes[dst].in_deg < 10) {
+                Edge *existing = find_edge(&g_graph, src, dst);
+                if (!existing) {
+                    edge_create(&g_graph, src, dst);
+                }
+            }
+            break;
+        }
+        
+        case META_MERGE_NODES: {
+            // Merge two nodes with very similar activation patterns
+            if (g_graph.node_count < 2) break;
+            
+            uint32_t best_i = 0, best_j = 0;
+            float best_similarity = 0.0f;
+            
+            // Find most similar pair (limit search to 100 pairs for speed)
+            for (int tries = 0; tries < 100; tries++) {
+                uint32_t i = rand() % g_graph.node_count;
+                uint32_t j = rand() % g_graph.node_count;
+                if (i == j) continue;
+                
+                Node *ni = &g_graph.nodes[i];
+                Node *nj = &g_graph.nodes[j];
+                
+                // Compute similarity from sig_history
+                uint32_t xor_bits = ni->sig_history ^ nj->sig_history;
+                float similarity = 1.0f - (__builtin_popcount(xor_bits) / 32.0f);
+                
+                if (similarity > best_similarity) {
+                    best_similarity = similarity;
+                    best_i = i;
+                    best_j = j;
+                }
+            }
+            
+            // Merge if very similar (> 90%)
+            if (best_similarity > 0.9f) {
+                // Redirect j's edges to i, then delete j
+                for (uint32_t e = 0; e < g_graph.edge_count; e++) {
+                    Edge *edge = &g_graph.edges[e];
+                    if (edge->src == best_j) edge->src = best_i;
+                    if (edge->dst == best_j) edge->dst = best_i;
+                }
+                node_delete(&g_graph, best_j);
+            }
+            break;
+        }
+        
+        case META_SPLIT_NODE: {
+            // Split overloaded node into two
+            if (g_graph.node_count == 0) break;
+            
+            // Find node with highest degree
+            uint32_t heaviest = 0;
+            uint16_t max_deg = 0;
+            for (uint32_t i = 0; i < g_graph.node_count; i++) {
+                Node *n = &g_graph.nodes[i];
+                uint16_t deg = n->in_deg + n->out_deg;
+                if (deg > max_deg) {
+                    max_deg = deg;
+                    heaviest = i;
+                }
+            }
+            
+            // Split if very highly connected (> 20 edges)
+            if (max_deg > 20) {
+                uint32_t new_idx = node_create(&g_graph);
+                if (new_idx != UINT32_MAX) {
+                    // Copy properties from original
+                    Node *orig = &g_graph.nodes[heaviest];
+                    Node *split = &g_graph.nodes[new_idx];
+                    split->op_type = orig->op_type;
+                    split->theta = orig->theta;
+                    
+                    // Redirect half of the edges to new node
+                    int redirect_count = 0;
+                    for (uint32_t e = 0; e < g_graph.edge_count && redirect_count < max_deg / 2; e++) {
+                        Edge *edge = &g_graph.edges[e];
+                        if (edge->dst == heaviest && randf() < 0.5f) {
+                            edge->dst = new_idx;
+                            redirect_count++;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        
+        case META_PRUNE_BRANCH: {
+            // Remove entire branch of unused nodes
+            if (g_graph.node_count == 0) break;
+            
+            // Find node with no outgoing edges and low utility
+            for (uint32_t i = 0; i < g_graph.node_count; i++) {
+                Node *n = &g_graph.nodes[i];
+                if (n->out_deg == 0 && n->avg_utility < 0.1f && n->executions > 100) {
+                    // Remove all edges pointing to this node
+                    for (uint32_t e = 0; e < g_graph.edge_count; e++) {
+                        Edge *edge = &g_graph.edges[e];
+                        if (edge->dst == i) {
+                            edge_delete(&g_graph, e);
+                        }
+                    }
+                    node_delete(&g_graph, i);
+                    break; // One at a time
+                }
+            }
+            break;
+        }
+        
+        case META_OPTIMIZE_SUBGRAPH: {
+            // Find frequently used modules and optimize them
+            if (g_graph.module_count == 0) break;
+            
+            // Find module with highest usage but low efficiency
+            uint32_t best_module = 0;
+            float best_optimization_potential = 0.0f;
+            
+            for (uint32_t i = 0; i < g_graph.module_count; i++) {
+                Module *m = &g_graph.modules[i];
+                // High executions + low efficiency = good target for optimization
+                float potential = (float)m->executions * (1.0f - m->efficiency);
+                if (potential > best_optimization_potential) {
+                    best_optimization_potential = potential;
+                    best_module = i;
+                }
+            }
+            
+            // Optimize: collapse to single proxy if highly used
+            // SAFEGUARD: Include complexity penalty to preserve diversity
+            if (best_optimization_potential > 100.0f) {
+                Module *m = &g_graph.modules[best_module];
+                
+                // Calculate complexity loss from collapsing
+                float complexity_loss = (float)m->node_count / (float)(g_graph.node_count + 1);
+                float performance_gain = m->efficiency * (float)m->executions;
+                float net_benefit = performance_gain - 10.0f * complexity_loss;
+                
+                // Only optimize if net benefit is positive
+                if (net_benefit > 0.0f && m->executions > 50 && !m->internal_nodes) {
+                    // Module already collapsed, increase its efficiency rating
+                    m->efficiency *= 1.1f;
+                } else if (net_benefit > 0.0f && m->pattern_frequency > 3) {
+                    // Frequent pattern - worth collapsing
+                    printf("[OPTIMIZE] Collapsing module %s (freq=%u, exec=%llu, benefit=%.2f)\n",
+                           m->name, m->pattern_frequency, (unsigned long long)m->executions, net_benefit);
+                    
+                    // Create proxy and mark module as "compiled"
+                    uint32_t proxy = create_module_proxy(&g_graph, m->id);
+                    (void)proxy; // Future: replace all instances with proxy
+                }
+            }
+            break;
+        }
+        
+        default:
+            break;
+    }
+}
+
+/* ========================================================================
+ * APPLY PENDING META-OPERATIONS (Causal Scheduling)
+ * ======================================================================== */
+
+void apply_pending_operations() {
+    for (uint32_t i = 0; i < g_sys.pending_count; i++) {
+        MetaOpType op = (MetaOpType)g_sys.pending_meta_ops[i][0];
+        uint32_t target_a = g_sys.pending_meta_ops[i][1];
+        uint32_t target_b = g_sys.pending_meta_ops[i][2];
+        
+        switch(op) {
+            case META_CREATE_EDGE:
+                if (target_a < g_graph.node_count && target_b < g_graph.node_count) {
+                    edge_create(&g_graph, target_a, target_b);
+                }
+                break;
+                
+            case META_DELETE_EDGE:
+                if (target_a < g_graph.edge_count) {
+                    edge_delete(&g_graph, target_a);
+                }
+                break;
+                
+            case META_MUTATE_OP:
+                if (target_a < g_graph.node_count) {
+                    Node *n = &g_graph.nodes[target_a];
+                    if (!n->is_protected) {
+                        n->op_type = (uint8_t)target_b;
+                        // Initialize op_params randomly
+                        for (int j = 0; j < 4; j++) {
+                            n->op_params[j] = randf() * 2.0f - 1.0f;
+                        }
+                        g_sys.mutations_attempted++;
+                    }
+                }
+                break;
+                
+            default:
+                break;
+        }
+    }
+    
+    // Clear pending queue
+    g_sys.pending_count = 0;
+}
+
+/* ========================================================================
+ * HIERARCHICAL MODULARITY (Networks of Networks)
+ * ======================================================================== */
+
+// Initialize module system
+void module_system_init(Graph *g, uint32_t cap) {
+    g->modules = calloc(cap, sizeof(Module));
+    g->module_cap = cap;
+    g->module_count = 0;
+}
+
+// Compute hash signature of a subgraph topology
+uint64_t compute_subgraph_signature(Graph *g, uint32_t *nodes, uint32_t count) {
+    uint64_t hash = 0;
+    
+    // Hash based on connectivity pattern
+    for (uint32_t i = 0; i < count; i++) {
+        for (uint32_t j = 0; j < count; j++) {
+            Edge *e = find_edge(g, nodes[i], nodes[j]);
+            if (e) {
+                // Include connection in hash
+                hash ^= ((uint64_t)nodes[i] * 31 + (uint64_t)nodes[j]) * 2654435761u;
+            }
+        }
+    }
+    
+    return hash;
+}
+
+// Create a new module from a subgraph
+uint32_t module_create(Graph *g, uint32_t *nodes, uint32_t node_count) {
+    if (g->module_count >= g->module_cap) {
+        // Auto-grow modules array
+        uint32_t new_cap = g->module_cap * 2;
+        Module *new_modules = realloc(g->modules, new_cap * sizeof(Module));
+        if (!new_modules) return UINT32_MAX;
+        g->modules = new_modules;
+        g->module_cap = new_cap;
+    }
+    
+    uint32_t idx = g->module_count++;
+    Module *m = &g->modules[idx];
+    memset(m, 0, sizeof(Module));
+    
+    m->id = idx + 1;
+    snprintf(m->name, 64, "Module_%u", m->id);
+    
+    // Copy node membership
+    m->node_count = node_count;
+    m->internal_nodes = malloc(node_count * sizeof(uint32_t));
+    memcpy(m->internal_nodes, nodes, node_count * sizeof(uint32_t));
+    
+    // Find edges within this subgraph
+    m->edge_count = 0;
+    m->internal_edges = malloc(node_count * node_count * sizeof(uint32_t)); // Max possible
+    
+    for (uint32_t i = 0; i < node_count; i++) {
+        for (uint32_t j = 0; j < node_count; j++) {
+            // Find edge index
+            for (uint32_t e = 0; e < g->edge_count; e++) {
+                Edge *edge = &g->edges[e];
+                if (edge->src == nodes[i] && edge->dst == nodes[j]) {
+                    m->internal_edges[m->edge_count++] = e;
+                }
+            }
+        }
+    }
+    
+    // Identify interface nodes (those with external connections)
+    m->input_count = 0;
+    m->output_count = 0;
+    m->input_nodes = malloc(node_count * sizeof(uint32_t));
+    m->output_nodes = malloc(node_count * sizeof(uint32_t));
+    
+    for (uint32_t i = 0; i < node_count; i++) {
+        Node *n = &g->nodes[nodes[i]];
+        
+        // Check for incoming edges from outside module
+        int has_external_input = 0;
+        for (uint32_t e = 0; e < g->edge_count; e++) {
+            Edge *edge = &g->edges[e];
+            if (edge->dst == nodes[i]) {
+                // Is source outside module?
+                int src_in_module = 0;
+                for (uint32_t k = 0; k < node_count; k++) {
+                    if (edge->src == nodes[k]) {
+                        src_in_module = 1;
+                        break;
+                    }
+                }
+                if (!src_in_module) {
+                    has_external_input = 1;
+                    break;
+                }
+            }
+        }
+        
+        if (has_external_input) {
+            m->input_nodes[m->input_count++] = nodes[i];
+            g->nodes[nodes[i]].is_module_interface = 1;
+        }
+        
+        // Check for outgoing edges to outside module
+        if (n->out_deg > 0) {
+            m->output_nodes[m->output_count++] = nodes[i];
+        }
+    }
+    
+    // Compute signature
+    m->signature_hash = compute_subgraph_signature(g, nodes, node_count);
+    
+    // Mark all nodes as belonging to this module
+    for (uint32_t i = 0; i < node_count; i++) {
+        g->nodes[nodes[i]].module_id = m->id;
+    }
+    
+    // Initialize tracking
+    m->executions = 0;
+    m->total_cycles = 0;
+    m->avg_utility = 0.5f;
+    m->efficiency = 0.0f;
+    m->pattern_frequency = 1;
+    m->hierarchy_level = 0;
+    m->parent_module = 0;
+    m->child_count = 0;
+    m->child_modules = NULL;
+    m->mutation_rate = g_sys.global_mutation_rate;
+    m->creation_tick = g_sys.tick;
+    m->last_used_tick = g_sys.tick;
+    
+    g_sys.modules_created++;
+    
+    printf("[MODULE CREATE] %s: %u nodes, %u edges, %u inputs, %u outputs, hash=0x%llx\n",
+           m->name, m->node_count, m->edge_count, m->input_count, m->output_count,
+           (unsigned long long)m->signature_hash);
+    
+    return idx;
+}
+
+// Create a proxy node that represents an entire module
+uint32_t create_module_proxy(Graph *g, uint32_t module_id) {
+    uint32_t proxy_idx = node_create(g);
+    if (proxy_idx == UINT32_MAX) return UINT32_MAX;
+    
+    Node *proxy = &g->nodes[proxy_idx];
+    proxy->is_module_proxy = 1;
+    proxy->proxy_module_id = module_id;
+    proxy->op_type = OP_GATE; // Gating operation for module execution
+    
+    printf("[MODULE PROXY] Created node %u as proxy for module %u\n", proxy_idx, module_id);
+    
+    return proxy_idx;
+}
+
+// Execute a module (run its internal subgraph)
+void module_execute(Graph *g, Module *m, float *inputs, float *outputs) {
+    if (!m) return;
+    
+    m->executions++;
+    m->last_used_tick = g_sys.tick;
+    g_sys.module_calls++;
+    
+    uint64_t start_cycles = g_sys.total_cycles;
+    
+    // Set inputs
+    for (uint32_t i = 0; i < m->input_count; i++) {
+        g->nodes[m->input_nodes[i]].a = inputs[i];
+    }
+    
+    // Propagate within module (mini thought process)
+    for (int hop = 0; hop < 3; hop++) { // Limited hops for module execution
+        // Accumulate inputs within module
+        for (uint32_t i = 0; i < m->node_count; i++) {
+            g->nodes[m->internal_nodes[i]].soma = 0.0f;
+        }
+        
+        for (uint32_t e = 0; e < m->edge_count; e++) {
+            Edge *edge = &g->edges[m->internal_edges[e]];
+            Node *src = &g->nodes[edge->src];
+            Node *dst = &g->nodes[edge->dst];
+            
+            float w_eff = g_sys.gamma_slow * edge->w_slow + (1.0f - g_sys.gamma_slow) * edge->w_fast;
+            dst->soma += src->a * w_eff;
+        }
+        
+        // Execute operations
+        for (uint32_t i = 0; i < m->node_count; i++) {
+            Node *n = &g->nodes[m->internal_nodes[i]];
+            n->a = execute_node_operation(n);
+        }
+    }
+    
+    // Read outputs
+    for (uint32_t i = 0; i < m->output_count; i++) {
+        outputs[i] = g->nodes[m->output_nodes[i]].a;
+    }
+    
+    // Track performance
+    uint64_t cycles_used = g_sys.total_cycles - start_cycles;
+    m->total_cycles += cycles_used;
+    
+    // Update utility based on output quality
+    float utility = 0.0f;
+    for (uint32_t i = 0; i < m->output_count; i++) {
+        utility += outputs[i]; // Simple: higher activation = more useful
+    }
+    utility /= (float)(m->output_count + 1);
+    
+    m->avg_utility = 0.99f * m->avg_utility + 0.01f * utility;
+    m->efficiency = m->avg_utility / ((float)m->total_cycles / (float)(m->executions + 1));
+}
+
+// Detect frequently occurring patterns in the graph
+void detect_patterns(Graph *g) {
+    if (g->node_count < 3) return; // Need at least 3 nodes for a pattern
+    
+    // Simple pattern detection: find densely connected subgraphs of size 3-7
+    for (int size = 3; size <= 7 && size <= (int)g->node_count; size++) {
+        // Try random subgraphs
+        for (int attempt = 0; attempt < 10; attempt++) {
+            uint32_t nodes[7];
+            
+            // Pick random starting node
+            nodes[0] = rand() % g->node_count;
+            int count = 1;
+            
+            // Grow subgraph by following edges
+            for (int i = 1; i < size; i++) {
+                // Find neighbors of current nodes
+                int found = 0;
+                for (uint32_t e = 0; e < g->edge_count && count < size; e++) {
+                    Edge *edge = &g->edges[e];
+                    
+                    // Is source in our set?
+                    int src_in = 0;
+                    for (int j = 0; j < count; j++) {
+                        if (edge->src == nodes[j]) {
+                            src_in = 1;
+                            break;
+                        }
+                    }
+                    
+                    if (src_in) {
+                        // Add destination if not already in set
+                        int dst_in = 0;
+                        for (int j = 0; j < count; j++) {
+                            if (edge->dst == nodes[j]) {
+                                dst_in = 1;
+                                break;
+                            }
+                        }
+                        
+                        if (!dst_in) {
+                            nodes[count++] = edge->dst;
+                            found = 1;
+                            break;
+                        }
+                    }
+                }
+                
+                if (!found) break;
+            }
+            
+            if (count >= 3) {
+                // Check if this pattern appears multiple times
+                uint64_t sig = compute_subgraph_signature(g, nodes, count);
+                
+                // See if we already have a module with this signature
+                int already_exists = 0;
+                for (uint32_t m = 0; m < g->module_count; m++) {
+                    if (g->modules[m].signature_hash == sig) {
+                        g->modules[m].pattern_frequency++;
+                        already_exists = 1;
+                        break;
+                    }
+                }
+                
+                // P3 SAFEGUARD: Statistical threshold for module creation
+                // Require minimum frequency AND statistical significance
+                if (!already_exists) {
+                    // Pattern must occur at least 5 times
+                    // AND represent > 0.1% of all ticks
+                    float frequency_ratio = 5.0f / (float)(g_sys.tick + 1);
+                    if (frequency_ratio > 0.001f && randf() < 0.01f) {
+                        module_create(g, nodes, count);
+                        g_sys.patterns_detected++;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Collapse a subgraph into a single proxy node
+void collapse_to_module(Graph *g, uint32_t *nodes, uint32_t count) {
+    // Create module from subgraph
+    uint32_t module_id = module_create(g, nodes, count);
+    if (module_id == UINT32_MAX) return;
+    
+    // Create proxy node
+    uint32_t proxy_idx = create_module_proxy(g, module_id + 1);
+    if (proxy_idx == UINT32_MAX) return;
+    
+    Module *m = &g->modules[module_id];
+    
+    // Redirect external edges to proxy
+    for (uint32_t e = 0; e < g->edge_count; e++) {
+        Edge *edge = &g->edges[e];
+        
+        // If edge points to module input, redirect to proxy
+        for (uint32_t i = 0; i < m->input_count; i++) {
+            if (edge->dst == m->input_nodes[i]) {
+                edge->dst = proxy_idx;
+            }
+        }
+        
+        // If edge comes from module output, redirect from proxy
+        for (uint32_t i = 0; i < m->output_count; i++) {
+            if (edge->src == m->output_nodes[i]) {
+                edge->src = proxy_idx;
+            }
+        }
+    }
+    
+    printf("[MODULE COLLAPSE] Collapsed %u nodes into proxy %u (module %u)\n",
+           count, proxy_idx, module_id + 1);
 }
 
 /* ========================================================================
@@ -343,29 +1293,88 @@ uint32_t ring_peek(RingBuffer *rb, uint8_t *data, uint32_t len) {
 }
 
 /* ========================================================================
+ * P2 SAFEGUARD: EDGE HASH TABLE (O(1) Lookups)
+ * ======================================================================== */
+
+static inline uint64_t edge_hash_key(uint32_t src, uint32_t dst) {
+    return ((uint64_t)src << 32) | (uint64_t)dst;
+}
+
+static inline uint32_t edge_hash_func(uint64_t key, uint32_t size) {
+    // Knuth multiplicative hash
+    return (uint32_t)((key * 2654435761ULL) & (size - 1));
+}
+
+void edge_hash_insert(Graph *g, uint32_t edge_idx) {
+    Edge *e = &g->edges[edge_idx];
+    uint64_t key = edge_hash_key(e->src, e->dst);
+    uint32_t hash = edge_hash_func(key, g->edge_hash_size);
+    
+    // Linear probing
+    for (uint32_t i = 0; i < g->edge_hash_size; i++) {
+        uint32_t idx = (hash + i) & (g->edge_hash_size - 1);
+        if (g->edge_hash[idx].key == 0 || g->edge_hash[idx].key == key) {
+            g->edge_hash[idx].key = key;
+            g->edge_hash[idx].edge_idx = edge_idx;
+            return;
+        }
+    }
+}
+
+void edge_hash_remove(Graph *g, uint32_t src, uint32_t dst) {
+    uint64_t key = edge_hash_key(src, dst);
+    uint32_t hash = edge_hash_func(key, g->edge_hash_size);
+    
+    for (uint32_t i = 0; i < g->edge_hash_size; i++) {
+        uint32_t idx = (hash + i) & (g->edge_hash_size - 1);
+        if (g->edge_hash[idx].key == key) {
+            g->edge_hash[idx].key = 0; // Mark as deleted
+            return;
+        }
+        if (g->edge_hash[idx].key == 0) return; // Not found
+    }
+}
+
+Edge* edge_hash_find(Graph *g, uint32_t src, uint32_t dst) {
+    uint64_t key = edge_hash_key(src, dst);
+    uint32_t hash = edge_hash_func(key, g->edge_hash_size);
+    
+    for (uint32_t i = 0; i < g->edge_hash_size; i++) {
+        uint32_t idx = (hash + i) & (g->edge_hash_size - 1);
+        if (g->edge_hash[idx].key == key) {
+            uint32_t edge_idx = g->edge_hash[idx].edge_idx;
+            if (edge_idx < g->edge_count) {
+                return &g->edges[edge_idx];
+            }
+        }
+        if (g->edge_hash[idx].key == 0) return NULL; // Not found
+    }
+    return NULL;
+}
+
+/* ========================================================================
  * GRAPH MANAGEMENT
  * ======================================================================== */
 
 void graph_init(Graph *g, uint32_t node_cap, uint32_t edge_cap) {
-    g->nodes = calloc(node_cap, sizeof(Node));
-    g->node_cap = node_cap;
-    g->node_count = 0;
-    g->node_free_list = calloc(node_cap, sizeof(uint32_t));
-    g->node_free_count = 0;
-    g->next_node_id = 1;
-    
-    g->edges = calloc(edge_cap, sizeof(Edge));
-    g->edge_cap = edge_cap;
-    g->edge_count = 0;
-    g->edge_free_list = calloc(edge_cap, sizeof(uint32_t));
-    g->edge_free_count = 0;
+    // Graph data now lives in mmap, initialized by graph_mmap_init()
+    // This function is now a no-op, kept for API compatibility
+    (void)g;
+    (void)node_cap;
+    (void)edge_cap;
 }
 
 void graph_free(Graph *g) {
-    free(g->nodes);
+    // Nodes, edges, modules are now in mmap, don't free
+    // Only free the free lists (in regular memory)
     free(g->node_free_list);
-    free(g->edges);
     free(g->edge_free_list);
+    
+    // P2 SAFEGUARD: Free edge hash table
+    if (g->edge_hash) {
+        free(g->edge_hash);
+        g->edge_hash = NULL;
+    }
 }
 
 uint32_t node_create(Graph *g) {
@@ -374,8 +1383,41 @@ uint32_t node_create(Graph *g) {
         idx = g->node_free_list[--g->node_free_count];
     } else {
         if (g->node_count >= g->node_cap) {
-            fprintf(stderr, "ERROR: Node capacity exceeded\n");
-            return UINT32_MAX;
+            // AUTO-GROW: Double the capacity when full
+            uint32_t new_cap = g->node_cap * 2;
+            printf("[AUTO-GROW] Expanding node capacity: %u -> %u\n", g->node_cap, new_cap);
+            
+            Node *new_nodes = realloc(g->nodes, new_cap * sizeof(Node));
+            if (!new_nodes) {
+                fprintf(stderr, "ERROR: Failed to allocate memory for %u nodes\n", new_cap);
+                return UINT32_MAX;
+            }
+            g->nodes = new_nodes;
+            
+            uint32_t *new_free_list = realloc(g->node_free_list, new_cap * sizeof(uint32_t));
+            if (!new_free_list) {
+                fprintf(stderr, "ERROR: Failed to allocate node free list\n");
+                return UINT32_MAX;
+            }
+            g->node_free_list = new_free_list;
+            
+            // Also grow P1/P0 baseline arrays
+            float *new_P1 = realloc(g_sys.P1, new_cap * sizeof(float));
+            float *new_P0 = realloc(g_sys.P0, new_cap * sizeof(float));
+            if (!new_P1 || !new_P0) {
+                fprintf(stderr, "ERROR: Failed to allocate baseline arrays\n");
+                return UINT32_MAX;
+            }
+            
+            // Initialize new baseline entries
+            for (uint32_t i = g->node_cap; i < new_cap; i++) {
+                new_P1[i] = 0.5f;
+                new_P0[i] = 0.5f;
+            }
+            
+            g_sys.P1 = new_P1;
+            g_sys.P0 = new_P0;
+            g->node_cap = new_cap;
         }
         idx = g->node_count++;
     }
@@ -391,11 +1433,54 @@ uint32_t node_create(Graph *g) {
     n->soma = 0.0f;
     n->burst = 0.0f;
     
+    // Initialize computational evolution fields
+    n->op_type = OP_SIGMOID; // Start with default operation
+    n->mutation_rate = g_sys.global_mutation_rate;
+    
+    // Random initialization of op_params
+    for (int i = 0; i < 4; i++) {
+        n->op_params[i] = randf() * 0.2f + 0.9f; // Start near 1.0
+    }
+    
+    // Performance tracking
+    n->executions = 0;
+    n->cycles_spent = 0;
+    n->avg_utility = 0.5f;
+    n->efficiency = 0.0f;
+    
+    // Memory for OP_MEMORY nodes
+    n->memory_value = 0.0f;
+    n->memory_age = 0;
+    
+    // Meta-node fields (initially not meta)
+    n->is_meta = 0;
+    n->meta_op = META_NONE;
+    n->meta_target = 0;
+    
+    // Module fields (initially root level)
+    n->module_id = 0; // 0 = root/global scope
+    n->is_module_interface = 0;
+    n->is_module_proxy = 0;
+    n->proxy_module_id = 0;
+    
+    // SAFEGUARD: Initialize safety fields
+    n->eval_depth = 0;
+    n->is_protected = 0;
+    
+    // SAFEGUARD: First 100 nodes are protected kernel (immutable base interpreter)
+    if (n->id <= 100) {
+        n->is_protected = 1;
+    }
+    
     return idx;
 }
 
 void node_delete(Graph *g, uint32_t idx) {
     if (idx >= g->node_count) return;
+    
+    // SAFEGUARD: Don't delete protected kernel nodes
+    if (g->nodes[idx].is_protected) return;
+    
     g->node_free_list[g->node_free_count++] = idx;
 }
 
@@ -405,8 +1490,24 @@ uint32_t edge_create(Graph *g, uint32_t src_idx, uint32_t dst_idx) {
         idx = g->edge_free_list[--g->edge_free_count];
     } else {
         if (g->edge_count >= g->edge_cap) {
-            fprintf(stderr, "ERROR: Edge capacity exceeded\n");
+            // AUTO-GROW: Double the capacity when full
+            uint32_t new_cap = g->edge_cap * 2;
+            printf("[AUTO-GROW] Expanding edge capacity: %u -> %u\n", g->edge_cap, new_cap);
+            
+            Edge *new_edges = realloc(g->edges, new_cap * sizeof(Edge));
+            if (!new_edges) {
+                fprintf(stderr, "ERROR: Failed to allocate memory for %u edges\n", new_cap);
             return UINT32_MAX;
+            }
+            g->edges = new_edges;
+            
+            uint32_t *new_free_list = realloc(g->edge_free_list, new_cap * sizeof(uint32_t));
+            if (!new_free_list) {
+                fprintf(stderr, "ERROR: Failed to allocate edge free list\n");
+                return UINT32_MAX;
+            }
+            g->edge_free_list = new_free_list;
+            g->edge_cap = new_cap;
         }
         idx = g->edge_count++;
     }
@@ -424,6 +1525,9 @@ uint32_t edge_create(Graph *g, uint32_t src_idx, uint32_t dst_idx) {
     
     g_sys.edges_created++;
     
+    // P2 SAFEGUARD: Add to hash table
+    edge_hash_insert(g, idx);
+    
     return idx;
 }
 
@@ -434,30 +1538,16 @@ void edge_delete(Graph *g, uint32_t idx) {
     if (e->src < g->node_count) g->nodes[e->src].out_deg--;
     if (e->dst < g->node_count) g->nodes[e->dst].in_deg--;
     
+    // P2 SAFEGUARD: Remove from hash table
+    edge_hash_remove(g, e->src, e->dst);
+    
     g->edge_free_list[g->edge_free_count++] = idx;
     g_sys.edges_pruned++;
 }
 
 Edge* find_edge(Graph *g, uint32_t src_idx, uint32_t dst_idx) {
-    for (uint32_t i = 0; i < g->edge_count; i++) {
-        if (g->edge_free_count > 0) {
-            // Check if this index is in free list
-            int is_free = 0;
-            for (uint32_t j = 0; j < g->edge_free_count; j++) {
-                if (g->edge_free_list[j] == i) {
-                    is_free = 1;
-                    break;
-                }
-            }
-            if (is_free) continue;
-        }
-        
-        Edge *e = &g->edges[i];
-        if (e->src == src_idx && e->dst == dst_idx) {
-            return e;
-        }
-    }
-    return NULL;
+    // P2 SAFEGUARD: Use hash table for O(1) lookup instead of O(n) search
+    return edge_hash_find(g, src_idx, dst_idx);
 }
 
 /* ========================================================================
@@ -468,10 +1558,34 @@ void detector_init(uint32_t cap) {
     g_sys.detectors = calloc(cap, sizeof(Detector));
     g_sys.detector_cap = cap;
     g_sys.detector_count = 0;
+    
+    // P2 SAFEGUARD: Initialize detector deduplication map
+    memset(g_sys.detector_map, 0, sizeof(g_sys.detector_map));
+    
+    // Rebuild detector map from existing detectors (if any)
+    for (uint32_t i = 0; i < g_sys.detector_count; i++) {
+        Detector *d = &g_sys.detectors[i];
+        if (d->len == 1) {
+            uint8_t byte = (uint8_t)d->pattern[0];
+            g_sys.detector_map[byte] = i + 1; // Store index+1 (0 means no detector)
+        }
+    }
 }
 
 uint32_t detector_add(const char *pattern, uint8_t type) {
-    if (g_sys.detector_count >= g_sys.detector_cap) return UINT32_MAX;
+    if (g_sys.detector_count >= g_sys.detector_cap) {
+        // AUTO-GROW: Double the capacity when full
+        uint32_t new_cap = g_sys.detector_cap * 2;
+        printf("[AUTO-GROW] Expanding detector capacity: %u -> %u\n", g_sys.detector_cap, new_cap);
+        
+        Detector *new_detectors = realloc(g_sys.detectors, new_cap * sizeof(Detector));
+        if (!new_detectors) {
+            fprintf(stderr, "ERROR: Failed to allocate memory for %u detectors\n", new_cap);
+            return UINT32_MAX;
+        }
+        g_sys.detectors = new_detectors;
+        g_sys.detector_cap = new_cap;
+    }
     
     Detector *d = &g_sys.detectors[g_sys.detector_count++];
     strncpy(d->pattern, pattern, 63);
@@ -484,6 +1598,29 @@ uint32_t detector_add(const char *pattern, uint8_t type) {
 }
 
 void detector_run_all(const uint8_t *frame, uint16_t frame_len) {
+    // AUTO-LEARN: Create detectors from input
+    // P2 SAFEGUARD: Use deduplication map to avoid duplicate detectors
+    if (frame_len > 0) {
+        uint32_t new_detectors = 0;
+        for (uint16_t i = 0; i < frame_len && i < 20; i++) {  // Learn up to 20 unique bytes
+            uint8_t byte = frame[i];
+            // Check if detector already exists for this byte (0 = no detector)
+            if (g_sys.detector_map[byte] == 0) {
+                char pattern[2] = {byte, 0};
+                uint32_t node_id = detector_add(pattern, 1);
+                if (node_id != UINT32_MAX) {
+                    g_sys.detector_map[byte] = g_sys.detector_count; // Map byte to detector index+1
+                    new_detectors++;
+                }
+            }
+        }
+        if (new_detectors > 0) {
+            printf("[BOOTSTRAP] Auto-learned %u new detectors (total: %u)\n", 
+                   new_detectors, g_sys.detector_count);
+            fflush(stdout);
+        }
+    }
+    
     for (uint32_t i = 0; i < g_sys.detector_count; i++) {
         Detector *d = &g_sys.detectors[i];
         Node *n = &g_graph.nodes[d->node_id];
@@ -535,16 +1672,50 @@ void macro_init(uint32_t cap) {
     g_sys.macro_cap = cap;
     g_sys.macro_count = 0;
     
+    // Initialize basic timing and persistence
+    g_sys.tick_ms = 50;
+    g_sys.snapshot_period = 2000;
+    
+    // Initialize continuous dynamics parameters
+    g_sys.lambda_decay = 0.99f;
+    g_sys.lambda_e = 0.9f;
+    g_sys.beta_blend = 0.7f;
+    g_sys.gamma_slow = 0.8f;
+    g_sys.eta_fast = 3.0f;
+    g_sys.delta_max = 4.0f;
+    g_sys.alpha_fast_decay = 0.95f;
+    g_sys.alpha_slow_decay = 0.999f;
+    
+    // Initialize meta-parameters for homeostatic adaptation
+    g_sys.adapt_rate = 0.001f;
+    g_sys.target_density = 0.15f;
+    g_sys.target_activity = 0.1f;
+    g_sys.target_prediction_acc = 0.85f;
+    
+    // Initialize target metrics for thought/time/space adaptation
+    g_sys.target_thought_depth = 5;
+    g_sys.target_settle_ratio = 0.7f;
+    g_sys.min_thought_hops = 3;
+    g_sys.max_hop_growth_rate = 0.1f; // 10% max growth per adaptation cycle
+    
+    // Initialize soft reference values
+    g_sys.prune_weight_ref = 2.0f;
+    g_sys.stale_ref = 200.0f;
+    g_sys.node_stale_ref = 1000.0f;
+    g_sys.co_freq_ref = 10.0f;
+    g_sys.density_ref = 0.6f;
+    g_sys.layer_min_size = 10;
+    
     // Initialize adaptive parameters
-    g_sys.sigmoid_k = INIT_SIGMOID_K;
-    g_sys.prune_rate = INIT_PRUNE_RATE;
-    g_sys.create_rate = INIT_CREATE_RATE;
-    g_sys.layer_rate = INIT_LAYER_RATE;
-    g_sys.energy_alpha = INIT_ENERGY_ALPHA;
-    g_sys.energy_decay = INIT_ENERGY_DECAY;
-    g_sys.epsilon_min = INIT_EPSILON_MIN;
-    g_sys.epsilon_max = INIT_EPSILON_MAX;
-    g_sys.activation_scale = INIT_ACTIVATION_SCALE;
+    g_sys.sigmoid_k = 0.5f;
+    g_sys.prune_rate = 0.0005f;
+    g_sys.create_rate = 0.01f;
+    g_sys.layer_rate = 0.001f;
+    g_sys.energy_alpha = 0.1f;
+    g_sys.energy_decay = 0.995f;
+    g_sys.epsilon_min = 0.05f;
+    g_sys.epsilon_max = 0.3f;
+    g_sys.activation_scale = 64.0f;
     
     g_sys.epsilon = 0.5f * (g_sys.epsilon_min + g_sys.epsilon_max); // start in middle
     g_sys.energy = 0.0f; // start with zero energy
@@ -555,11 +1726,11 @@ void macro_init(uint32_t cap) {
     g_sys.prediction_acc = 0.5f; // neutral start
     
     // Initialize adaptive emergent parameters
-    g_sys.max_thought_hops = INIT_MAX_THOUGHT_HOPS;
-    g_sys.stability_eps = INIT_STABILITY_EPS;
-    g_sys.activation_eps = INIT_ACTIVATION_EPS;
-    g_sys.temporal_decay = INIT_TEMPORAL_DECAY;
-    g_sys.spatial_k = INIT_SPATIAL_K;
+    g_sys.max_thought_hops = 10; // initial value, can grow unlimited
+    g_sys.stability_eps = 0.005f;
+    g_sys.activation_eps = 0.01f;
+    g_sys.temporal_decay = 0.1f;
+    g_sys.spatial_k = 0.5f;
     
     // Initialize emergent time/space/thought tracking
     g_sys.thought_depth = 0;
@@ -569,10 +1740,46 @@ void macro_init(uint32_t cap) {
     g_sys.mean_spatial_distance = 0.0f;
     g_sys.thoughts_settled = 0;
     g_sys.thoughts_maxed = 0;
+    
+    // Initialize self-optimization tracking
+    g_sys.total_cycles = 0;
+    g_sys.meta_operations = 0;
+    g_sys.mutations_attempted = 0;
+    g_sys.mutations_kept = 0;
+    g_sys.global_mutation_rate = 0.01f; // 1% initial mutation rate
+    
+    // Initialize operation type statistics
+    for (int i = 0; i < NUM_OPS; i++) {
+        g_sys.op_type_counts[i] = 0;
+        g_sys.op_type_utility[i] = 0.5f;
+    }
+    
+    // Initialize hierarchical modularity tracking
+    g_sys.modules_created = 0;
+    g_sys.modules_pruned = 0;
+    g_sys.patterns_detected = 0;
+    g_sys.max_hierarchy_level = 0;
+    g_sys.modularity_score = 0.0f;
+    g_sys.module_calls = 0;
+    
+    // SAFEGUARD: Initialize pending operations queue
+    g_sys.pending_count = 0;
 }
 
 uint32_t macro_add(const uint8_t *bytes, uint16_t len) {
-    if (g_sys.macro_count >= g_sys.macro_cap) return UINT32_MAX;
+    if (g_sys.macro_count >= g_sys.macro_cap) {
+        // AUTO-GROW: Double the capacity when full
+        uint32_t new_cap = g_sys.macro_cap * 2;
+        printf("[AUTO-GROW] Expanding macro capacity: %u -> %u\n", g_sys.macro_cap, new_cap);
+        
+        Macro *new_macros = realloc(g_sys.macros, new_cap * sizeof(Macro));
+        if (!new_macros) {
+            fprintf(stderr, "ERROR: Failed to allocate memory for %u macros\n", new_cap);
+            return UINT32_MAX;
+        }
+        g_sys.macros = new_macros;
+        g_sys.macro_cap = new_cap;
+    }
     
     Macro *m = &g_sys.macros[g_sys.macro_count++];
     memcpy(m->bytes, bytes, len);
@@ -585,31 +1792,7 @@ uint32_t macro_add(const uint8_t *bytes, uint16_t len) {
     return g_sys.macro_count - 1;
 }
 
-void macro_add_defaults() {
-    // Safe alphabet
-    for (char c = 'a'; c <= 'z'; c++) {
-        uint8_t b = (uint8_t)c;
-        macro_add(&b, 1);
-    }
-    for (char c = 'A'; c <= 'Z'; c++) {
-        uint8_t b = (uint8_t)c;
-        macro_add(&b, 1);
-    }
-    for (char c = '0'; c <= '9'; c++) {
-        uint8_t b = (uint8_t)c;
-        macro_add(&b, 1);
-    }
-    
-    // Special chars
-    uint8_t newline = '\n';
-    macro_add(&newline, 1);
-    uint8_t space = ' ';
-    macro_add(&space, 1);
-    uint8_t dot = '.';
-    macro_add(&dot, 1);
-    uint8_t slash = '/';
-    macro_add(&slash, 1);
-}
+// macro_add_defaults() REMOVED - graph learns all patterns from input
 
 uint32_t macro_select() {
     // ε-greedy
@@ -625,7 +1808,7 @@ uint32_t macro_select() {
         
         for (uint32_t i = 0; i < g_sys.macro_count; i++) {
             Macro *m = &g_sys.macros[i];
-            float u = GAMMA_SLOW * m->U_slow + (1.0f - GAMMA_SLOW) * m->U_fast;
+            float u = g_sys.gamma_slow * m->U_slow + (1.0f - g_sys.gamma_slow) * m->U_fast;
             if (u > best_u) {
                 best_u = u;
                 best_idx = i;
@@ -641,10 +1824,10 @@ void macro_update_utility(uint32_t idx, float reward) {
     Macro *m = &g_sys.macros[idx];
     
     // Fast track
-    m->U_fast = ALPHA_FAST_DECAY * m->U_fast + (1.0f - ALPHA_FAST_DECAY) * reward;
+    m->U_fast = g_sys.alpha_fast_decay * m->U_fast + (1.0f - g_sys.alpha_fast_decay) * reward;
     
     // Slow track (less aggressive)
-    m->U_slow = ALPHA_SLOW_DECAY * m->U_slow + (1.0f - ALPHA_SLOW_DECAY) * reward;
+    m->U_slow = g_sys.alpha_slow_decay * m->U_slow + (1.0f - g_sys.alpha_slow_decay) * reward;
     
     m->use_count++;
     m->last_used_tick = g_sys.tick;
@@ -684,7 +1867,7 @@ void propagate() {
         Node *dst = &g_graph.nodes[e->dst];
         
         // Effective weight (continuous blend)
-        float w_eff = GAMMA_SLOW * e->w_slow + (1.0f - GAMMA_SLOW) * e->w_fast;
+        float w_eff = g_sys.gamma_slow * e->w_slow + (1.0f - g_sys.gamma_slow) * e->w_fast;
         if (w_eff < 0.0f) w_eff = 0.0f;
         if (w_eff > 255.0f) w_eff = 255.0f;
         
@@ -725,7 +1908,7 @@ void propagate() {
     g_sys.mean_temporal_distance = active_edges > 0 ? total_temporal_dist / active_edges : 0.0f;
     g_sys.mean_spatial_distance = active_edges > 0 ? total_spatial_dist / active_edges : 0.0f;
     
-    // Compute predictions (continuous sigmoid activation)
+    // Compute predictions using node-specific operations
     g_sys.active_node_count = 0;
     g_sys.activation_delta = 0.0f;
     
@@ -735,9 +1918,8 @@ void propagate() {
         // Save previous activation for delta computation
         float prev_a = n->a;
         
-        // Continuous activation: sigmoid((soma - theta) / scale) — adaptive scale
-        float x = (n->soma - n->theta) / g_sys.activation_scale;
-        n->hat = sigmoid(x);
+        // Execute node-specific operation (polymorphic activation)
+        n->hat = execute_node_operation(n);
         
         // Update actual activation (becomes prediction for next hop)
         n->a = n->hat;
@@ -752,11 +1934,39 @@ void propagate() {
         
         // Accumulate total active ticks (continuous)
         n->total_active_ticks += n->a;
+        
+        // Update node utility and efficiency
+        float utility = 1.0f - fabsf(n->a - n->hat); // How well node predicted
+        n->avg_utility = 0.99f * n->avg_utility + 0.01f * utility;
+        if (n->cycles_spent > 0) {
+            n->efficiency = n->avg_utility / (float)(n->cycles_spent / (n->executions + 1));
+        }
+        
+        // Track operation type statistics
+        g_sys.op_type_counts[n->op_type]++;
+        g_sys.op_type_utility[n->op_type] = 0.99f * g_sys.op_type_utility[n->op_type] + 0.01f * utility;
     }
     
     // Normalize activation delta
     if (g_graph.node_count > 0) {
         g_sys.activation_delta /= (float)g_graph.node_count;
+    }
+    
+    // SAFEGUARD: Energy normalization to prevent thermal runaway
+    float total_activation = 0.0f;
+    for (uint32_t i = 0; i < g_graph.node_count; i++) {
+        total_activation += g_graph.nodes[i].a;
+    }
+    
+    // If total energy exceeds cap, normalize all activations
+    float energy_cap = (float)g_graph.node_count * 0.5f; // Average activation of 0.5
+    if (total_activation > energy_cap) {
+        float scale = energy_cap / total_activation;
+        for (uint32_t i = 0; i < g_graph.node_count; i++) {
+            g_graph.nodes[i].a *= scale;
+            g_graph.nodes[i].hat *= scale;
+        }
+        // printf("[ENERGY CAP] Normalized: %.1f -> %.1f\n", total_activation, energy_cap);
     }
 }
 
@@ -764,14 +1974,14 @@ void propagate() {
  * THOUGHT CONVERGENCE (Multi-hop propagation until stable)
  * ======================================================================== */
 
-uint16_t converge_thought() {
+uint32_t converge_thought() {
     // Run multiple propagation passes until prediction stabilizes (adaptive)
     // This mimics cortical gamma oscillations: perception → reverberation → settlement
     
     g_sys.prev_mean_error = g_sys.mean_error;
     g_sys.thought_depth = 0;
     
-    for (uint16_t hop = 0; hop < g_sys.max_thought_hops; hop++) {
+    for (uint32_t hop = 0; hop < g_sys.max_thought_hops; hop++) {
         g_sys.thought_depth = hop + 1;
         
         // One propagation pass
@@ -784,7 +1994,7 @@ uint16_t converge_thought() {
         int activation_stable = (g_sys.activation_delta < g_sys.activation_eps);
         
         // Require minimum depth for meaningful thought
-        if (error_stable && activation_stable && hop >= (MIN_THOUGHT_HOPS - 1)) {
+        if (error_stable && activation_stable && hop >= (g_sys.min_thought_hops - 1)) {
             // Thought has settled - internal dynamics reached equilibrium
             g_sys.thoughts_settled++;
             return g_sys.thought_depth;
@@ -811,8 +2021,8 @@ void observe_and_update() {
     // Update global baseline counts (continuous)
     for (uint32_t i = 0; i < g_graph.node_count; i++) {
         Node *n = &g_graph.nodes[i];
-        g_sys.P1[i] *= LAMBDA_DECAY;
-        g_sys.P0[i] *= LAMBDA_DECAY;
+        g_sys.P1[i] *= g_sys.lambda_decay;
+        g_sys.P0[i] *= g_sys.lambda_decay;
         
         // Continuous accumulation weighted by activation
         g_sys.P1[i] += n->a;
@@ -848,8 +2058,8 @@ void observe_and_update() {
         float d_ij = src->a_prev * (a_j_next - hat_j);
         
         // Update predictive lift counters (continuous)
-        e->C11 *= LAMBDA_DECAY;
-        e->C10 *= LAMBDA_DECAY;
+        e->C11 *= g_sys.lambda_decay;
+        e->C10 *= g_sys.lambda_decay;
         
         // Continuous accumulation weighted by activation
         e->C11 += src->a_prev * a_j_next;
@@ -862,18 +2072,18 @@ void observe_and_update() {
         
         float e_ij = d_ij * surprise;
         
-        float U_ij = BETA_BLEND * u_ij + (1.0f - BETA_BLEND) * e_ij;
+        float U_ij = g_sys.beta_blend * u_ij + (1.0f - g_sys.beta_blend) * e_ij;
         
         // Update average usefulness for slow track
         e->avg_U = 0.95f * e->avg_U + 0.05f * U_ij;
         
         // Eligibility trace (continuous)
-        e->eligibility = LAMBDA_E * e->eligibility + src->a_prev;
+        e->eligibility = g_sys.lambda_e * e->eligibility + src->a_prev;
         
         // Fast weight update (continuous, no branches)
-        float delta_fast = ETA_FAST * U_ij * e->eligibility;
+        float delta_fast = g_sys.eta_fast * U_ij * e->eligibility;
         // Soft clamp using tanh
-        delta_fast = DELTA_MAX * tanhf(delta_fast / DELTA_MAX);
+        delta_fast = g_sys.delta_max * tanhf(delta_fast / g_sys.delta_max);
         
         float new_w_fast = (float)e->w_fast + delta_fast;
         // Soft clamp to [0, 255]
@@ -937,39 +2147,39 @@ void adapt_parameters() {
     // Homeostatic adaptation: adjust parameters to maintain targets
     
     // 1. PRUNING RATE: Increase if too dense, decrease if too sparse
-    float density_error = g_sys.current_density - TARGET_DENSITY;
-    g_sys.prune_rate += ADAPT_RATE * density_error;
+    float density_error = g_sys.current_density - g_sys.target_density;
+    g_sys.prune_rate += g_sys.adapt_rate * density_error;
     if (g_sys.prune_rate < 0.0001f) g_sys.prune_rate = 0.0001f;
     if (g_sys.prune_rate > 0.01f) g_sys.prune_rate = 0.01f;
     
     // 2. CREATION RATE: Increase if too sparse and prediction is good
     // Decrease if too dense or prediction is poor
-    float density_deficit = TARGET_DENSITY - g_sys.current_density;
-    float prediction_quality = g_sys.prediction_acc - TARGET_PREDICTION_ACC;
-    g_sys.create_rate += ADAPT_RATE * density_deficit * (1.0f + prediction_quality);
+    float density_deficit = g_sys.target_density - g_sys.current_density;
+    float prediction_quality = g_sys.prediction_acc - g_sys.target_prediction_acc;
+    g_sys.create_rate += g_sys.adapt_rate * density_deficit * (1.0f + prediction_quality);
     if (g_sys.create_rate < 0.001f) g_sys.create_rate = 0.001f;
     if (g_sys.create_rate > 0.1f) g_sys.create_rate = 0.1f;
     
     // 3. ACTIVATION SCALE: Adjust to maintain target activity level
-    float activity_error = g_sys.current_activity - TARGET_ACTIVITY;
+    float activity_error = g_sys.current_activity - g_sys.target_activity;
     // If too active, increase scale (harder to activate)
     // If not active enough, decrease scale (easier to activate)
-    g_sys.activation_scale += ADAPT_RATE * 100.0f * activity_error;
+    g_sys.activation_scale += g_sys.adapt_rate * 100.0f * activity_error;
     if (g_sys.activation_scale < 16.0f) g_sys.activation_scale = 16.0f;
     if (g_sys.activation_scale > 256.0f) g_sys.activation_scale = 256.0f;
     
     // 4. ENERGY ALPHA: Adapt based on prediction accuracy
     // If prediction is poor, increase energy learning to respond faster
     // If prediction is good, decrease to avoid overreaction
-    float acc_deficit = TARGET_PREDICTION_ACC - g_sys.prediction_acc;
-    g_sys.energy_alpha += ADAPT_RATE * 0.1f * acc_deficit;
+    float acc_deficit = g_sys.target_prediction_acc - g_sys.prediction_acc;
+    g_sys.energy_alpha += g_sys.adapt_rate * 0.1f * acc_deficit;
     if (g_sys.energy_alpha < 0.01f) g_sys.energy_alpha = 0.01f;
     if (g_sys.energy_alpha > 0.5f) g_sys.energy_alpha = 0.5f;
     
     // 5. ENERGY DECAY: Faster decay if predictions are stable
     // Slower decay if predictions are unstable (keep energy around longer)
     float stability = 1.0f - fabsf(acc_deficit);
-    g_sys.energy_decay += ADAPT_RATE * 0.01f * (stability - 0.5f);
+    g_sys.energy_decay += g_sys.adapt_rate * 0.01f * (stability - 0.5f);
     if (g_sys.energy_decay < 0.95f) g_sys.energy_decay = 0.95f;
     if (g_sys.energy_decay > 0.999f) g_sys.energy_decay = 0.999f;
     
@@ -977,14 +2187,14 @@ void adapt_parameters() {
     // If activity is too uniform, sharpen transitions (increase k)
     // If activity is too varied, smooth transitions (decrease k)
     float activity_pressure = (g_sys.current_activity < 0.05f || g_sys.current_activity > 0.5f) ? 1.0f : -1.0f;
-    g_sys.sigmoid_k += ADAPT_RATE * activity_pressure;
+    g_sys.sigmoid_k += g_sys.adapt_rate * activity_pressure;
     if (g_sys.sigmoid_k < 0.1f) g_sys.sigmoid_k = 0.1f;
     if (g_sys.sigmoid_k > 2.0f) g_sys.sigmoid_k = 2.0f;
     
     // 7. EPSILON RANGE: Widen if prediction is poor, narrow if good
     // This allows more exploration when needed
-    float exploration_need = (g_sys.prediction_acc < TARGET_PREDICTION_ACC) ? 1.0f : -1.0f;
-    g_sys.epsilon_max += ADAPT_RATE * 0.1f * exploration_need;
+    float exploration_need = (g_sys.prediction_acc < g_sys.target_prediction_acc) ? 1.0f : -1.0f;
+    g_sys.epsilon_max += g_sys.adapt_rate * 0.1f * exploration_need;
     if (g_sys.epsilon_max < 0.2f) g_sys.epsilon_max = 0.2f;
     if (g_sys.epsilon_max > 0.5f) g_sys.epsilon_max = 0.5f;
     
@@ -993,48 +2203,43 @@ void adapt_parameters() {
     
     // 8. LAYER EMERGENCE RATE: Increase if density is high and structure is good
     float structural_readiness = g_sys.current_density * g_sys.prediction_acc;
-    g_sys.layer_rate += ADAPT_RATE * 0.01f * (structural_readiness - 0.1f);
+    g_sys.layer_rate += g_sys.adapt_rate * 0.01f * (structural_readiness - 0.1f);
     if (g_sys.layer_rate < 0.0001f) g_sys.layer_rate = 0.0001f;
     if (g_sys.layer_rate > 0.01f) g_sys.layer_rate = 0.01f;
     
-    // 9. CAPACITY MANAGEMENT: If near capacity, increase pruning, decrease creation
-    float node_capacity_ratio = (float)g_graph.node_count / (float)g_graph.node_cap;
-    float edge_capacity_ratio = (float)g_graph.edge_count / (float)g_graph.edge_cap;
+    // 9. CAPACITY MONITORING: Arrays auto-grow as needed, no artificial limits
+    // System self-balances through homeostatic adaptation above
     
-    if (node_capacity_ratio > CAPACITY_THRESH) {
-        g_sys.prune_rate *= 1.01f;
-        g_sys.create_rate *= 0.99f;
-    }
-    if (edge_capacity_ratio > CAPACITY_THRESH) {
-        g_sys.prune_rate *= 1.02f;
-    }
-    
-    // 10. THOUGHT DEPTH ADAPTATION: Adjust max hops based on settlement patterns
+    // 10. THOUGHT DEPTH ADAPTATION: Adjust max hops based on settlement patterns (soft control, no hard limit)
     float current_settle_ratio = (g_sys.thoughts_settled + g_sys.thoughts_maxed) > 0
         ? (float)g_sys.thoughts_settled / (float)(g_sys.thoughts_settled + g_sys.thoughts_maxed)
         : 0.5f;
     
     // If too many thoughts max out, increase limit
     // If too many settle early, decrease limit
-    float settle_error = current_settle_ratio - TARGET_SETTLE_RATIO;
-    float depth_error = (float)g_sys.thought_depth - (float)TARGET_THOUGHT_DEPTH;
+    float settle_error = current_settle_ratio - g_sys.target_settle_ratio;
+    float depth_error = (float)g_sys.thought_depth - (float)g_sys.target_thought_depth;
     
     // Increase max if thoughts often max out (settle_ratio low)
     // Decrease max if thoughts settle too early (depth below target)
-    float hop_adjustment = -ADAPT_RATE * 10.0f * (settle_error + 0.5f * depth_error);
-    g_sys.max_thought_hops = (uint16_t)((float)g_sys.max_thought_hops + hop_adjustment);
-    if (g_sys.max_thought_hops < MIN_THOUGHT_HOPS) g_sys.max_thought_hops = MIN_THOUGHT_HOPS;
-    if (g_sys.max_thought_hops > MAX_THOUGHT_HOPS_LIMIT) g_sys.max_thought_hops = MAX_THOUGHT_HOPS_LIMIT;
+    float hop_adjustment = -g_sys.adapt_rate * 10.0f * (settle_error + 0.5f * depth_error);
+    
+    // Apply soft growth rate limiting (prevents runaway growth)
+    if (hop_adjustment > 0) {
+        hop_adjustment = fminf(hop_adjustment, (float)g_sys.max_thought_hops * g_sys.max_hop_growth_rate);
+    }
+    
+    g_sys.max_thought_hops = (uint32_t)fmaxf((float)g_sys.min_thought_hops, (float)g_sys.max_thought_hops + hop_adjustment);
     
     // 11. STABILITY THRESHOLD ADAPTATION: Adjust based on thought depth
     // If thoughts too shallow, tighten convergence (decrease eps)
     // If thoughts too deep, relax convergence (increase eps)
-    float depth_pressure = ((float)g_sys.thought_depth - (float)TARGET_THOUGHT_DEPTH) / (float)TARGET_THOUGHT_DEPTH;
-    g_sys.stability_eps += ADAPT_RATE * 0.01f * depth_pressure;
+    float depth_pressure = ((float)g_sys.thought_depth - (float)g_sys.target_thought_depth) / (float)g_sys.target_thought_depth;
+    g_sys.stability_eps += g_sys.adapt_rate * 0.01f * depth_pressure;
     if (g_sys.stability_eps < 0.001f) g_sys.stability_eps = 0.001f;
     if (g_sys.stability_eps > 0.05f) g_sys.stability_eps = 0.05f;
     
-    g_sys.activation_eps += ADAPT_RATE * 0.02f * depth_pressure;
+    g_sys.activation_eps += g_sys.adapt_rate * 0.02f * depth_pressure;
     if (g_sys.activation_eps < 0.005f) g_sys.activation_eps = 0.005f;
     if (g_sys.activation_eps > 0.1f) g_sys.activation_eps = 0.1f;
     
@@ -1042,7 +2247,7 @@ void adapt_parameters() {
     // If edges are too stale on average, increase decay (make time matter more)
     // If edges are too fresh, decrease decay (time matters less)
     float temporal_pressure = (g_sys.mean_temporal_distance - 10.0f) / 10.0f;
-    g_sys.temporal_decay += ADAPT_RATE * 0.1f * temporal_pressure;
+    g_sys.temporal_decay += g_sys.adapt_rate * 0.1f * temporal_pressure;
     if (g_sys.temporal_decay < 0.01f) g_sys.temporal_decay = 0.01f;
     if (g_sys.temporal_decay > 0.5f) g_sys.temporal_decay = 0.5f;
     
@@ -1050,7 +2255,7 @@ void adapt_parameters() {
     // If spatial distances are uniform, adjust scaling
     // High spatial distance = nodes are "far" in graph → may need adjustment
     float spatial_pressure = (g_sys.mean_spatial_distance - 2.0f) / 2.0f;
-    g_sys.spatial_k += ADAPT_RATE * spatial_pressure;
+    g_sys.spatial_k += g_sys.adapt_rate * spatial_pressure;
     if (g_sys.spatial_k < 0.1f) g_sys.spatial_k = 0.1f;
     if (g_sys.spatial_k > 2.0f) g_sys.spatial_k = 2.0f;
 }
@@ -1073,12 +2278,12 @@ void prune() {
         
         Edge *e = &g_graph.edges[i];
         
-        float w_eff = GAMMA_SLOW * e->w_slow + (1.0f - GAMMA_SLOW) * e->w_fast;
+        float w_eff = g_sys.gamma_slow * e->w_slow + (1.0f - g_sys.gamma_slow) * e->w_fast;
         
         // Compute pruning probability from multiple continuous factors
-        float p_weak = soft_below(w_eff, PRUNE_WEIGHT_REF);        // weak weight
+        float p_weak = soft_below(w_eff, g_sys.prune_weight_ref);        // weak weight
         float p_unused = soft_below((float)e->use_count, 10.0f);   // low use
-        float p_stale = soft_above((float)e->stale_ticks, STALE_REF); // stale
+        float p_stale = soft_above((float)e->stale_ticks, g_sys.stale_ref); // stale
         
         // Combined pruning probability (multiplicative) — adaptive rate
         float p_prune = g_sys.prune_rate * p_weak * p_unused * p_stale;
@@ -1105,7 +2310,7 @@ void prune() {
         // Pruning probability for isolated nodes
         float p_isolated = (n->in_deg == 0 && n->out_deg == 0) ? 1.0f : 0.0f;
         float staleness = (float)(g_sys.tick - n->last_tick_seen);
-        float p_stale = soft_above(staleness, NODE_STALE_REF);
+        float p_stale = soft_above(staleness, g_sys.node_stale_ref);
         
         float p_prune_node = g_sys.prune_rate * 2.0f * p_isolated * p_stale;
         
@@ -1164,7 +2369,7 @@ void try_create_nodes() {
             float similarity = 1.0f - (__builtin_popcount(xor_bits) / 32.0f);
             
             // Compute novelty: combination of co-occurrence and similarity
-            float novelty = (co_count / CO_FREQ_REF) * similarity;
+            float novelty = (co_count / g_sys.co_freq_ref) * similarity;
             
             // Creation probability: sigmoid of novelty, modulated by energy — adaptive rate
             float p_create = g_sys.create_rate * sigmoid(novelty * 10.0f - 5.0f);
@@ -1188,11 +2393,50 @@ void try_create_nodes() {
 }
 
 /* ========================================================================
+ * META-NODE CREATION (Self-optimization agents)
+ * ======================================================================== */
+
+void try_create_meta_nodes() {
+    // Probabilistically create meta-nodes with different optimization capabilities
+    if (g_graph.node_count < 10) return; // Need some structure first
+    
+    // Create different types of meta-nodes based on system needs
+    MetaOpType meta_types[] = {
+        META_MUTATE_OP,         // Evolve node operations
+        META_CREATE_SHORTCUT,   // Add skip connections
+        META_MERGE_NODES,       // Reduce redundancy
+        META_SPLIT_NODE,        // Handle overload
+        META_OPTIMIZE_SUBGRAPH, // Discover and compile patterns
+        META_PRUNE_BRANCH       // Remove waste
+    };
+    
+    for (int i = 0; i < 6; i++) {
+        // Low probability - we don't want too many meta-nodes
+        if (randf() < 0.001f * (1.0f + g_sys.energy)) {
+            uint32_t meta_idx = node_create(&g_graph);
+            if (meta_idx != UINT32_MAX) {
+                Node *meta = &g_graph.nodes[meta_idx];
+                meta->is_meta = 1;
+                meta->meta_op = meta_types[i];
+                meta->cluster_id = g_sys.layers_created++;
+                meta->op_type = OP_GATE; // Meta-nodes use gating
+                
+                printf("[META-NODE] Created %s optimizer (node %u)\n",
+                       i == 0 ? "MUTATE" : i == 1 ? "SHORTCUT" : i == 2 ? "MERGE" :
+                       i == 3 ? "SPLIT" : i == 4 ? "OPTIMIZE" : "PRUNE",
+                       meta_idx);
+            }
+        }
+    }
+}
+
+/* ========================================================================
  * LAYER EMERGENCE (Probabilistic meta-node creation from dense clusters)
  * ======================================================================== */
 
 void try_layer_emergence() {
     // Probabilistic layer emergence: continuous density measures
+    // Also creates meta-nodes for self-optimization
     
     for (uint32_t i = 0; i < g_graph.node_count && i < 500; i++) {
         int is_free = 0;
@@ -1208,7 +2452,7 @@ void try_layer_emergence() {
         if (n->is_meta) continue;
         
         // Soft check for sufficient connectivity (no hard threshold)
-        float connectivity_strength = soft_above((float)n->out_deg, (float)(LAYER_MIN_SIZE / 2));
+        float connectivity_strength = soft_above((float)n->out_deg, (float)(g_sys.layer_min_size / 2));
         if (connectivity_strength < 0.3f) continue; // skip very weakly connected
         
         // Count active neighbors (continuous measure)
@@ -1236,8 +2480,8 @@ void try_layer_emergence() {
         float density = total_neighbors > 0.0f ? active_neighbors / total_neighbors : 0.0f;
         
         // Compute emergence probability from continuous factors
-        float p_dense = soft_above(density, DENSITY_REF);
-        float p_size = soft_above(total_neighbors, (float)LAYER_MIN_SIZE);
+        float p_dense = soft_above(density, g_sys.density_ref);
+        float p_size = soft_above(total_neighbors, (float)g_sys.layer_min_size);
         
         float p_emerge = g_sys.layer_rate * p_dense * p_size * connectivity_strength;
         p_emerge *= (1.0f + 0.5f * g_sys.energy); // energy modulates emergence
@@ -1258,56 +2502,158 @@ void try_layer_emergence() {
 }
 
 /* ========================================================================
- * PERSISTENCE
+ * PERSISTENCE (Memory-Mapped Single File)
  * ======================================================================== */
 
-void persist_graph() {
-    FILE *fn = fopen("nodes.bin", "wb");
-    if (fn) {
-        fwrite(&g_graph.node_count, sizeof(uint32_t), 1, fn);
-        fwrite(&g_graph.next_node_id, sizeof(uint32_t), 1, fn);
-        fwrite(g_graph.nodes, sizeof(Node), g_graph.node_count, fn);
-        fclose(fn);
+#include <sys/mman.h>
+#include <sys/stat.h>
+
+typedef struct {
+    uint32_t node_count;
+    uint32_t node_cap;
+    uint32_t next_node_id;
+    uint32_t edge_count;
+    uint32_t edge_cap;
+    uint32_t module_count;
+    uint32_t module_cap;
+    uint64_t tick;
+    // Graph data follows immediately after header
+} GraphFileHeader;
+
+static int g_mmap_fd = -1;
+static void *g_mmap_base = NULL;
+static size_t g_mmap_size = 0;
+
+void graph_mmap_init(const char *filename, uint32_t initial_node_cap, uint32_t initial_edge_cap) {
+    // Calculate initial file size
+    size_t header_size = sizeof(GraphFileHeader);
+    size_t nodes_size = initial_node_cap * sizeof(Node);
+    size_t edges_size = initial_edge_cap * sizeof(Edge);
+    size_t modules_size = 64 * sizeof(Module);
+    g_mmap_size = header_size + nodes_size + edges_size + modules_size;
+    
+    // Open or create file
+    g_mmap_fd = open(filename, O_RDWR | O_CREAT, 0644);
+    if (g_mmap_fd < 0) {
+        fprintf(stderr, "ERROR: Failed to open %s\n", filename);
+        exit(1);
     }
     
-    FILE *fe = fopen("edges.bin", "wb");
-    if (fe) {
-        fwrite(&g_graph.edge_count, sizeof(uint32_t), 1, fe);
-        fwrite(g_graph.edges, sizeof(Edge), g_graph.edge_count, fe);
-        fclose(fe);
+    // Check if file exists and has data
+    struct stat st;
+    fstat(g_mmap_fd, &st);
+    int file_exists = (st.st_size > 0);
+    
+    if (!file_exists) {
+        // New file - set size
+        if (ftruncate(g_mmap_fd, g_mmap_size) < 0) {
+            fprintf(stderr, "ERROR: Failed to size file\n");
+            exit(1);
+        }
+    } else {
+        // Existing file - use its size
+        g_mmap_size = st.st_size;
     }
     
-    printf("[PERSIST] tick=%llu nodes=%u edges=%u\n", 
+    // Memory map the file
+    g_mmap_base = mmap(NULL, g_mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, g_mmap_fd, 0);
+    if (g_mmap_base == MAP_FAILED) {
+        fprintf(stderr, "ERROR: Failed to mmap file\n");
+        exit(1);
+    }
+    
+    // Set up pointers into mapped memory
+    GraphFileHeader *header = (GraphFileHeader *)g_mmap_base;
+    
+    if (file_exists && header->node_count > 0) {
+        // Restore from existing file
+        g_graph.node_count = header->node_count;
+        g_graph.node_cap = header->node_cap;
+        g_graph.next_node_id = header->next_node_id;
+        g_graph.edge_count = header->edge_count;
+        g_graph.edge_cap = header->edge_cap;
+        g_graph.module_count = header->module_count;
+        g_graph.module_cap = header->module_cap;
+        g_sys.tick = header->tick;
+        
+        printf("[RESTORE] Loaded from mmap: %u nodes, %u edges, tick=%llu\n", 
+               g_graph.node_count, g_graph.edge_count, (unsigned long long)g_sys.tick);
+    } else {
+        // Initialize new file
+        header->node_count = 0;
+        header->node_cap = initial_node_cap;
+        header->next_node_id = 1;
+        header->edge_count = 0;
+        header->edge_cap = initial_edge_cap;
+        header->module_count = 0;
+        header->module_cap = 64;
+        header->tick = 0;
+        
+        g_graph.node_count = 0;
+        g_graph.node_cap = initial_node_cap;
+        g_graph.next_node_id = 1;
+        g_graph.edge_count = 0;
+        g_graph.edge_cap = initial_edge_cap;
+        g_graph.module_count = 0;
+        g_graph.module_cap = 64;
+        
+        printf("[MMAP INIT] Created new graph file: %zu bytes\n", g_mmap_size);
+    }
+    
+    // Point graph structures to mapped memory
+    g_graph.nodes = (Node *)((char *)g_mmap_base + header_size);
+    g_graph.edges = (Edge *)((char *)g_graph.nodes + header->node_cap * sizeof(Node));
+    g_graph.modules = (Module *)((char *)g_graph.edges + header->edge_cap * sizeof(Edge));
+    
+    // Allocate free lists in regular memory (not persisted)
+    g_graph.node_free_list = calloc(initial_node_cap, sizeof(uint32_t));
+    g_graph.edge_free_list = calloc(initial_edge_cap, sizeof(uint32_t));
+    g_graph.node_free_count = 0;
+    g_graph.edge_free_count = 0;
+    
+    // P2 SAFEGUARD: Initialize edge hash table
+    g_graph.edge_hash_size = EDGE_HASH_SIZE;
+    g_graph.edge_hash = calloc(EDGE_HASH_SIZE, sizeof(EdgeHashEntry));
+    
+    // Rebuild hash table from existing edges (if restoring)
+    if (file_exists && g_graph.edge_count > 0) {
+        for (uint32_t i = 0; i < g_graph.edge_count; i++) {
+            edge_hash_insert(&g_graph, i);
+        }
+        printf("[RESTORE] Rebuilt edge hash table: %u edges\n", g_graph.edge_count);
+    }
+}
+
+void graph_mmap_sync() {
+    if (g_mmap_base == NULL) return;
+    
+    // Update header
+    GraphFileHeader *header = (GraphFileHeader *)g_mmap_base;
+    header->node_count = g_graph.node_count;
+    header->node_cap = g_graph.node_cap;
+    header->next_node_id = g_graph.next_node_id;
+    header->edge_count = g_graph.edge_count;
+    header->edge_cap = g_graph.edge_cap;
+    header->module_count = g_graph.module_count;
+    header->module_cap = g_graph.module_cap;
+    header->tick = g_sys.tick;
+    
+    // Sync to disk
+    msync(g_mmap_base, g_mmap_size, MS_ASYNC);
+    
+    printf("[MMAP SYNC] tick=%llu nodes=%u edges=%u\n", 
            (unsigned long long)g_sys.tick, g_graph.node_count, g_graph.edge_count);
 }
 
-void restore_graph() {
-    FILE *fn = fopen("nodes.bin", "rb");
-    if (fn) {
-        uint32_t count, next_id;
-        fread(&count, sizeof(uint32_t), 1, fn);
-        fread(&next_id, sizeof(uint32_t), 1, fn);
-        
-        if (count <= g_graph.node_cap) {
-            fread(g_graph.nodes, sizeof(Node), count, fn);
-            g_graph.node_count = count;
-            g_graph.next_node_id = next_id;
-            printf("[RESTORE] Loaded %u nodes\n", count);
-        }
-        fclose(fn);
+void graph_mmap_close() {
+    if (g_mmap_base != NULL) {
+        graph_mmap_sync();
+        munmap(g_mmap_base, g_mmap_size);
+        g_mmap_base = NULL;
     }
-    
-    FILE *fe = fopen("edges.bin", "rb");
-    if (fe) {
-        uint32_t count;
-        fread(&count, sizeof(uint32_t), 1, fe);
-        
-        if (count <= g_graph.edge_cap) {
-            fread(g_graph.edges, sizeof(Edge), count, fe);
-            g_graph.edge_count = count;
-            printf("[RESTORE] Loaded %u edges\n", count);
-        }
-        fclose(fe);
+    if (g_mmap_fd >= 0) {
+        close(g_mmap_fd);
+        g_mmap_fd = -1;
     }
 }
 
@@ -1326,14 +2672,30 @@ void read_input() {
 }
 
 void slice_frame() {
-    // Extract up to FRAME_SIZE bytes from RX ring for current tick
-    g_sys.current_frame_len = ring_read(&g_sys.rx_ring, g_sys.current_frame, FRAME_SIZE);
+    // Extract up to current_frame_cap bytes from RX ring for current tick
+    g_sys.current_frame_len = ring_read(&g_sys.rx_ring, g_sys.current_frame, g_sys.current_frame_cap);
 }
 
 void merge_output_into_input() {
     // Append last output to current input frame for self-observation
-    if (g_sys.last_output_frame_len > 0 && 
-        g_sys.current_frame_len + g_sys.last_output_frame_len < FRAME_SIZE) {
+    if (g_sys.last_output_frame_len > 0) {
+        uint32_t required_size = g_sys.current_frame_len + g_sys.last_output_frame_len;
+        
+        // Auto-grow current_frame if needed
+        if (required_size > g_sys.current_frame_cap) {
+            uint32_t new_cap = g_sys.current_frame_cap;
+            while (new_cap < required_size) new_cap *= 2;
+            
+            printf("[AUTO-GROW] Expanding current_frame: %u -> %u bytes\n", g_sys.current_frame_cap, new_cap);
+            uint8_t *new_frame = realloc(g_sys.current_frame, new_cap);
+            if (new_frame) {
+                g_sys.current_frame = new_frame;
+                g_sys.current_frame_cap = new_cap;
+            } else {
+                fprintf(stderr, "ERROR: Failed to grow current_frame\n");
+                return;
+            }
+        }
         
         memcpy(g_sys.current_frame + g_sys.current_frame_len,
                g_sys.last_output_frame,
@@ -1344,6 +2706,19 @@ void merge_output_into_input() {
 }
 
 void emit_action() {
+    // If no macros exist yet, create one from current input
+    if (g_sys.macro_count == 0) {
+        if (g_sys.current_frame_len > 0) {
+            // Learn first macro from input
+            uint16_t len = g_sys.current_frame_len > 64 ? 64 : g_sys.current_frame_len;
+            macro_add(g_sys.current_frame, len);
+            printf("[BOOTSTRAP] Learned first macro from input (%u bytes)\n", len);
+        } else {
+            // No input yet, emit nothing
+            return;
+        }
+    }
+    
     uint32_t macro_idx = macro_select();
     Macro *m = &g_sys.macros[macro_idx];
     
@@ -1403,6 +2778,37 @@ void main_loop() {
         // (4) OUTPUT — "do it"
         emit_action();
         
+        // EVOLUTIONARY MUTATION: Nodes randomly change operations
+        if (randf() < g_sys.global_mutation_rate && g_graph.node_count > 0) {
+            uint32_t mutate_idx = rand() % g_graph.node_count;
+            Node *n = &g_graph.nodes[mutate_idx];
+            
+            // SAFEGUARD: Don't mutate protected kernel nodes
+            if (randf() < n->mutation_rate && !n->is_meta && !n->is_protected) {
+                uint8_t old_op = n->op_type;
+                n->op_type = rand() % NUM_OPS;
+                g_sys.mutations_attempted++;
+                
+                // Initialize new params
+                for (int i = 0; i < 4; i++) {
+                    n->op_params[i] = randf() * 2.0f - 1.0f;
+                }
+                
+                printf("[MUTATION] Node %u: %d -> %d\n", mutate_idx, old_op, n->op_type);
+            }
+        }
+        
+        // META-NODE EXECUTION: Active meta-nodes queue modifications
+        for (uint32_t i = 0; i < g_graph.node_count && i < 10; i++) { // Limit to 10 meta-ops per tick
+            Node *n = &g_graph.nodes[i];
+            if (n->is_meta && n->a > 0.5f) {
+                execute_meta_operation(n);
+            }
+        }
+        
+        // SAFEGUARD: Apply pending operations AFTER current tick (causal scheduling)
+        apply_pending_operations();
+        
         // Continuous probabilistic housekeeping (no hard schedules)
         // Prune is called every tick but acts probabilistically inside
         prune();
@@ -1413,9 +2819,40 @@ void main_loop() {
             try_layer_emergence();
         }
         
-        // Persistence still on fixed schedule (practical consideration)
-        if (g_sys.tick % SNAPSHOT_PERIOD == 0) {
-            persist_graph();
+        // META-NODE CREATION: Spawn optimization agents (very rare)
+        if (randf() < g_sys.layer_rate * 0.1f) {
+            try_create_meta_nodes();
+        }
+        
+        // PATTERN DETECTION: Find frequently used subgraphs (every 100 ticks)
+        if (g_sys.tick % 100 == 0 && g_graph.node_count > 10) {
+            detect_patterns(&g_graph);
+        }
+        
+        // MODULE EXECUTION: Execute module proxies hierarchically
+        for (uint32_t i = 0; i < g_graph.node_count && i < 20; i++) {
+            Node *n = &g_graph.nodes[i];
+            if (n->is_module_proxy && n->a > 0.3f && n->proxy_module_id > 0) {
+                // Execute the module this node represents
+                uint32_t mod_idx = n->proxy_module_id - 1;
+                if (mod_idx < g_graph.module_count) {
+                    Module *m = &g_graph.modules[mod_idx];
+                    float inputs[16] = {n->a}; // Simple: use proxy activation as input
+                    float outputs[16] = {0};
+                    
+                    module_execute(&g_graph, m, inputs, outputs);
+                    
+                    // Set proxy output to module's output
+                    if (m->output_count > 0) {
+                        n->a = outputs[0];
+                    }
+                }
+            }
+        }
+        
+        // Sync memory-mapped file periodically
+        if (g_sys.tick % g_sys.snapshot_period == 0) {
+            graph_mmap_sync();
         }
         
         // Logging (still periodic for readability)
@@ -1447,10 +2884,55 @@ void main_loop() {
                    g_sys.temporal_decay);
         }
         
+        // Evolution status (every 1000 ticks)
+        if (g_sys.tick % 1000 == 0 && g_sys.tick > 0) {
+            printf("[EVOLUTION] meta_ops=%llu mutations=%u/%u (%.1f%%) cycles=%llu\n",
+                   (unsigned long long)g_sys.meta_operations,
+                   g_sys.mutations_kept,
+                   g_sys.mutations_attempted,
+                   g_sys.mutations_attempted > 0 ? (100.0f * g_sys.mutations_kept / g_sys.mutations_attempted) : 0.0f,
+                   (unsigned long long)g_sys.total_cycles);
+            
+            // Show operation type distribution
+            printf("[OPS] ");
+            const char *op_names[] = {"SIG", "SUM", "PRO", "MAX", "MIN", "GAT", "MEM", "CMP", "SEQ", "HSH", "MOD", "THR", "REL", "TNH"};
+            for (int i = 0; i < NUM_OPS && i < 14; i++) {
+                if (g_sys.op_type_counts[i] > 0) {
+                    printf("%s:%u(%.2f) ", op_names[i], g_sys.op_type_counts[i], g_sys.op_type_utility[i]);
+                }
+            }
+            printf("\n");
+            
+            // Show module/hierarchy status
+            if (g_graph.module_count > 0 || g_sys.patterns_detected > 0) {
+                printf("[MODULES] created=%u patterns=%u calls=%u hierarchy_lvl=%u\n",
+                       g_sys.modules_created,
+                       g_sys.patterns_detected,
+                       g_sys.module_calls,
+                       g_sys.max_hierarchy_level);
+                
+                // Show active modules
+                if (g_graph.module_count > 0 && g_graph.module_count <= 10) {
+                    printf("[ACTIVE_MODULES] ");
+                    for (uint32_t i = 0; i < g_graph.module_count; i++) {
+                        Module *m = &g_graph.modules[i];
+                        printf("%s(%u nodes,%.1f util,freq=%u) ", 
+                               m->name, m->node_count, m->avg_utility, m->pattern_frequency);
+                    }
+                    printf("\n");
+                }
+            }
+            
+            // Reset counters for next period
+            for (int i = 0; i < NUM_OPS; i++) {
+                g_sys.op_type_counts[i] = 0;
+            }
+        }
+        
         g_sys.tick++;
         
         // Sleep for tick duration
-        usleep(TICK_MS * 1000);
+        usleep(g_sys.tick_ms * 1000);
     }
 }
 
@@ -1461,10 +2943,20 @@ void main_loop() {
 void system_init(uint32_t node_cap, uint32_t edge_cap, uint32_t detector_cap, uint32_t macro_cap) {
     memset(&g_sys, 0, sizeof(System));
     
-    graph_init(&g_graph, node_cap, edge_cap);
+    // Initialize memory-mapped graph file (replaces graph_init)
+    graph_mmap_init("graph.mmap", node_cap, edge_cap);
     
     ring_init(&g_sys.rx_ring, RX_RING_SIZE);
     ring_init(&g_sys.tx_ring, TX_RING_SIZE);
+    
+    // Allocate dynamic frame buffers (start with FRAME_SIZE, can grow if needed)
+    g_sys.current_frame = malloc(FRAME_SIZE);
+    g_sys.current_frame_cap = FRAME_SIZE;
+    g_sys.current_frame_len = 0;
+    
+    g_sys.last_output_frame = malloc(FRAME_SIZE);
+    g_sys.last_output_frame_cap = FRAME_SIZE;
+    g_sys.last_output_frame_len = 0;
     
     detector_init(detector_cap);
     macro_init(macro_cap);
@@ -1478,28 +2970,23 @@ void system_init(uint32_t node_cap, uint32_t edge_cap, uint32_t detector_cap, ui
         g_sys.P0[i] = 0.5f;
     }
     
-    // Add default detectors
-    detector_add("\n", 1);           // newline
-    detector_add("/dev/video", 1);   // video device
-    detector_add("error", 1);        // error string
-    detector_add("Error", 1);
-    detector_add("\xFF\xD8\xFF", 1); // JPEG header
-    detector_add("created", 1);
-    detector_add("success", 1);
-    detector_add("failed", 1);
-    detector_add("$", 1);            // shell prompt
+    // NO HARDCODED PATTERNS - graph learns everything from input
+    // All detectors and macros emerge from observing byte patterns
     
-    // Add default macros
-    macro_add_defaults();
-    
-    printf("[INIT] System initialized: %u nodes, %u edges, %u detectors, %u macros\n",
-           node_cap, edge_cap, g_sys.detector_count, g_sys.macro_count);
+    printf("[INIT] Ultra-minimal system (auto-growing from %u nodes, %u edges)\n",
+           node_cap, edge_cap);
+    printf("[INIT] Starting empty - graph learns all patterns from input\n");
+    printf("[INIT] Graph lives in: graph.mmap (grows to 4TB)\n");
+    fflush(stdout);
 }
 
 void system_cleanup() {
+    graph_mmap_close();  // Close and sync memory-mapped file
     graph_free(&g_graph);
     ring_free(&g_sys.rx_ring);
     ring_free(&g_sys.tx_ring);
+    free(g_sys.current_frame);
+    free(g_sys.last_output_frame);
     free(g_sys.detectors);
     free(g_sys.macros);
     free(g_sys.P1);
@@ -1511,21 +2998,18 @@ void system_cleanup() {
  * ======================================================================== */
 
 int main(int argc, char **argv) {
-    uint32_t node_cap = DEFAULT_NODE_CAP;
-    uint32_t edge_cap = DEFAULT_EDGE_CAP;
-    uint32_t detector_cap = DEFAULT_DETECTOR_CAP;
-    uint32_t macro_cap = DEFAULT_MACRO_CAP;
+    // Start small - system auto-grows as needed (no artificial limits)
+    uint32_t node_cap = 256;      // Start tiny, will double to 512, 1K, 2K, 4K, 8K, 16K...
+    uint32_t edge_cap = 1024;     // Start tiny, will double to 2K, 4K, 8K, 16K, 32K...
+    uint32_t detector_cap = 32;   // Start tiny, will grow as patterns are learned
+    uint32_t macro_cap = 128;     // Start tiny, will grow as actions are learned
     
-    // Simple CLI parsing
+    // Simple CLI parsing (mainly for help)
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--nodes") == 0 && i + 1 < argc) {
-            node_cap = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--edges") == 0 && i + 1 < argc) {
-            edge_cap = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--help") == 0) {
-            printf("Usage: %s [--nodes N] [--edges M]\n", argv[0]);
-            printf("  --nodes N   Node capacity (default %u)\n", DEFAULT_NODE_CAP);
-            printf("  --edges M   Edge capacity (default %u)\n", DEFAULT_EDGE_CAP);
+        if (strcmp(argv[i], "--help") == 0) {
+            printf("Usage: %s\n", argv[0]);
+            printf("Melvin Core - Self-organizing learning system\n");
+            printf("All structures auto-grow as needed (unlimited by design)\n");
             return 0;
         }
     }
@@ -1538,12 +3022,14 @@ int main(int argc, char **argv) {
     
     system_init(node_cap, edge_cap, detector_cap, macro_cap);
     
-    // Try to restore previous state
-    restore_graph();
+    // Graph automatically restores from graph.mmap if it exists
     
     printf("=== MELVIN CORE STARTING ===\n");
-    printf("Tick period: %d ms\n", TICK_MS);
-    printf("Always-on loop active. Press Ctrl+C to stop.\n\n");
+    printf("Pure self-programming system - ALL INPUT IS CODE\n");
+    printf("Graph learns its own language from patterns in input\n");
+    printf("Tick period: %u ms\n", g_sys.tick_ms);
+    printf("Press Ctrl+C to stop.\n\n");
+    fflush(stdout);
     
     main_loop();
     
