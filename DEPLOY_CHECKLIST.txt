@@ -1,0 +1,285 @@
+═══════════════════════════════════════════════════════════════════
+MELVINOS DAEMON — DEPLOYMENT CHECKLIST
+═══════════════════════════════════════════════════════════════════
+
+JETSON CONNECTION
+═══════════════════════════════════════════════════════════════════
+Host: 169.254.123.100
+User: melvin
+Pass: 123456
+Connection: USB (COM8)
+
+═══════════════════════════════════════════════════════════════════
+PRE-DEPLOYMENT (DEV MACHINE)
+═══════════════════════════════════════════════════════════════════
+
+□ Install sshpass:
+    macOS:  brew install hudochenkov/sshpass/sshpass
+    Linux:  sudo apt install sshpass
+
+□ Verify local builds:
+    make -f Makefile_daemon
+    make
+    gcc -O2 -std=c99 -o shm_reader shm_reader.c
+
+□ Test locally:
+    ./test_daemon.sh
+    
+□ Verify all files present:
+    ls -1 *.c *.h *.sh Makefile* melvind.conf
+
+═══════════════════════════════════════════════════════════════════
+DEPLOYMENT TO JETSON
+═══════════════════════════════════════════════════════════════════
+
+□ Connect to Jetson via USB/Ethernet
+
+□ Test SSH connection:
+    ssh melvin@169.254.123.100
+    (password: 123456)
+
+□ Run deployment script:
+    ./deploy_jetson.sh
+    
+    This will:
+    - Create ~/melvinos directory on Jetson
+    - Copy all source files
+    - Build on Jetson
+    - Create systemd service
+    - Install service
+
+□ Verify deployment:
+    ssh melvin@169.254.123.100
+    cd ~/melvinos
+    ls -lh melvind melvin_core
+
+═══════════════════════════════════════════════════════════════════
+JETSON SETUP
+═══════════════════════════════════════════════════════════════════
+
+□ SSH to Jetson:
+    ssh melvin@169.254.123.100
+
+□ Verify build:
+    cd ~/melvinos
+    ./melvind --help
+    ./melvin_core --help
+
+□ Check CAN interface (if using):
+    ip link show can0
+    
+    If not configured:
+    sudo ip link set can0 type can bitrate 500000
+    sudo ip link set can0 up
+
+□ Enable melvind service:
+    sudo systemctl enable melvind
+
+□ Start melvind:
+    sudo systemctl start melvind
+
+□ Check status:
+    sudo systemctl status melvind
+
+□ Monitor logs:
+    journalctl -u melvind -f
+
+═══════════════════════════════════════════════════════════════════
+VERIFICATION
+═══════════════════════════════════════════════════════════════════
+
+□ Check shared memory created:
+    ls -lh /dev/shm/melvin_*
+    
+    Expected:
+    /dev/shm/melvin_rx  (16 MB)
+    /dev/shm/melvin_tx  (16 MB)
+
+□ Verify daemon is emitting frames:
+    cd ~/melvinos
+    ./shm_reader | head -20
+    
+    Should show frames like:
+    "proc:cpu cpu  12345 ..."
+    "sys:temp temp0=58.0 ..."
+
+□ Run melvin_core:
+    ./melvin_core
+    
+    Should show:
+    [INIT] System initialized...
+    [TICK 100] nodes=9 edges=0...
+
+□ Verify integration:
+    # Terminal 1
+    sudo systemctl status melvind
+    
+    # Terminal 2
+    ./shm_reader | ./melvin_core
+    
+    Both should run without errors
+
+═══════════════════════════════════════════════════════════════════
+TESTING
+═══════════════════════════════════════════════════════════════════
+
+□ Monitor CPU stats:
+    journalctl -u melvind -f | grep "proc:cpu"
+
+□ Monitor temperature:
+    journalctl -u melvind -f | grep "sys:temp"
+
+□ Monitor network:
+    journalctl -u melvind -f | grep "net:"
+
+□ Stress test:
+    # Generate activity
+    stress --cpu 4 --timeout 60s
+    
+    # Watch daemon handle load
+    journalctl -u melvind -f
+
+□ Check buffer health:
+    watch -n 1 'ls -lh /dev/shm/melvin_*'
+
+□ Verify persistence:
+    # Let melvin_core run for 2000 ticks
+    ls -lh nodes.bin edges.bin
+    
+    # Restart
+    ./melvin_core
+    # Should restore graph
+
+═══════════════════════════════════════════════════════════════════
+PRODUCTION CHECKLIST
+═══════════════════════════════════════════════════════════════════
+
+□ Security hardening:
+    - Restrict shared memory permissions
+    - Implement action validation
+    - Enable SELinux/AppArmor
+    - Limit daemon capabilities
+
+□ Monitoring setup:
+    - Configure log rotation
+    - Set up alerts for daemon failures
+    - Monitor buffer usage
+    - Track learning progress
+
+□ Backup:
+    - Schedule nodes.bin/edges.bin backups
+    - Save melvind configuration
+    - Document custom detectors
+
+□ Documentation:
+    - Record custom monitor configurations
+    - Document added detectors
+    - Note action whitelist
+
+═══════════════════════════════════════════════════════════════════
+TROUBLESHOOTING
+═══════════════════════════════════════════════════════════════════
+
+ISSUE: melvind won't start
+FIX:
+  sudo journalctl -u melvind -n 50
+  Check permissions on /dev/shm
+  Verify no other process using shared memory
+
+ISSUE: No frames in shared memory
+FIX:
+  ps aux | grep melvind
+  Verify daemon is running
+  Check monitor initialization in logs
+
+ISSUE: melvin_core not reading
+FIX:
+  ./shm_reader | head
+  Verify frames are present
+  Check stdin is open (not redirected)
+
+ISSUE: Buffer overflow
+FIX:
+  Increase SHM_SIZE in melvin_protocol.h
+  Reduce monitor emission rates
+  Speed up melvin_core consumption
+
+ISSUE: CAN not working
+FIX:
+  sudo ip link set can0 up
+  Check SocketCAN drivers loaded
+  Verify bitrate configured
+  Note: CAN is optional
+
+═══════════════════════════════════════════════════════════════════
+QUICK COMMANDS
+═══════════════════════════════════════════════════════════════════
+
+Start:
+  sudo systemctl start melvind
+
+Stop:
+  sudo systemctl stop melvind
+
+Restart:
+  sudo systemctl restart melvind
+
+Status:
+  sudo systemctl status melvind
+
+Logs:
+  journalctl -u melvind -f
+
+Run melvin_core:
+  cd ~/melvinos
+  ./melvin_core
+
+Full system:
+  ./run_system.sh
+
+Stop all:
+  ./stop_system.sh
+
+Clean shared memory:
+  make -f Makefile_daemon clean-shm
+
+═══════════════════════════════════════════════════════════════════
+SUCCESS CRITERIA
+═══════════════════════════════════════════════════════════════════
+
+✓ melvind running as systemd service
+✓ Shared memory buffers present (2 × 16 MB)
+✓ All 5 monitors emitting frames
+✓ melvin_core consuming frames
+✓ Learning progressing (edges created)
+✓ Persistence working (nodes.bin/edges.bin)
+✓ System stable for 1+ hour
+✓ No buffer overruns
+✓ Logs clean (no critical errors)
+
+═══════════════════════════════════════════════════════════════════
+POST-DEPLOYMENT
+═══════════════════════════════════════════════════════════════════
+
+□ Monitor for 24 hours
+
+□ Check logs for errors:
+    journalctl -u melvind --since "24 hours ago" | grep -i error
+
+□ Verify learning progress:
+    ./analyze_graph.py
+
+□ Document any issues
+
+□ Optimize if needed:
+    - Adjust emission rates
+    - Tune buffer sizes
+    - Add custom detectors
+
+═══════════════════════════════════════════════════════════════════
+
+Deployment complete when all checks pass.
+System is production-ready for autonomous learning from system events.
+
+═══════════════════════════════════════════════════════════════════
+

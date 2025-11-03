@@ -1,0 +1,21 @@
+[Unit]
+Description=MelvinOS Visualization Interface
+After=graphical.target melvind.service melvin-core.service gdm.service
+Wants=graphical.target melvind.service melvin-core.service
+
+[Service]
+Type=simple
+User=melvin
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/run/user/1000/gdm/Xauthority"
+WorkingDirectory=/home/melvin/melvinos
+ExecStartPre=/bin/sleep 12
+ExecStart=/usr/bin/python3 /home/melvin/melvinos/melvin_visualizer.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical.target
+

@@ -1,0 +1,23 @@
+# Compiled executable
+melvin_core
+
+# Binary graph state files (generated at runtime)
+nodes.bin
+edges.bin
+
+# Temporary files
+*.o
+*.tmp
+*.log
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Python cache
+__pycache__/
+*.pyc
+

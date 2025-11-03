@@ -1,0 +1,98 @@
+═══════════════════════════════════════════════════════════════
+COPY/PASTE THESE COMMANDS INTO YOUR SCREEN SESSION
+═══════════════════════════════════════════════════════════════
+
+# Stop the curses visualizer (it doesn't work well on tty1)
+sudo systemctl stop melvin-visualizer
+
+# Create a simple text-based display that WILL work
+sudo tee /home/melvin/melvinos/simple_monitor_display.sh > /dev/null << 'EOF'
+#!/bin/bash
+# Simple text display for HDMI monitor
+exec > /dev/tty1 2>&1 < /dev/tty1
+
+while true; do
+  clear
+  echo "╔══════════════════════════════════════════════════════╗"
+  echo "║           🧠 MELVINOS CONSCIOUSNESS 🧠               ║"
+  echo "╚══════════════════════════════════════════════════════╝"
+  echo ""
+  echo "Time: $(date '+%Y-%m-%d %H:%M:%S')"
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "SERVICES STATUS:"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  printf "  melvind:       %s\n" "$(systemctl is-active melvind)"
+  printf "  melvin-core:   %s\n" "$(systemctl is-active melvin-core)"
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "SYSTEM METRICS:"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  free -h | grep Mem | awk '{printf "  RAM:  %s / %s used\n", $3, $2}'
+  uptime | awk -F'load average:' '{printf "  Load: %s\n", $2}'
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "RECENT THOUGHTS (from melvin_core.log):"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  tail -8 /tmp/melvin_core.log 2>/dev/null | head -8 || echo "  (Core log initializing...)"
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  echo "  Melvin is thinking... 🧠"
+  echo ""
+  sleep 3
+done
+EOF
+
+# Make it executable
+chmod +x /home/melvin/melvinos/simple_monitor_display.sh
+
+# Update the service to use simple display
+sudo tee /etc/systemd/system/melvin-visualizer.service > /dev/null << 'SERVICE'
+[Unit]
+Description=MelvinOS Monitor Display
+After=multi-user.target melvind.service melvin-core.service
+Wants=melvind.service melvin-core.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/melvin/melvinos
+ExecStart=/home/melvin/melvinos/simple_monitor_display.sh
+Restart=always
+RestartSec=5
+StandardInput=tty
+StandardOutput=tty
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+# Reload and start
+sudo systemctl daemon-reload
+sudo systemctl enable melvin-visualizer
+sudo systemctl restart melvin-visualizer
+
+# Check status
+sleep 3
+sudo systemctl status melvin-visualizer --no-pager | head -15
+
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo "✅ Display configured! Check your HDMI monitor now!"
+echo "═══════════════════════════════════════════════════════════════"
+echo ""
+echo "You should see Melvin's status updating every 3 seconds"
+echo ""
+
+═══════════════════════════════════════════════════════════════
+PASTE THE ABOVE INTO YOUR SCREEN SESSION
+═══════════════════════════════════════════════════════════════
+
+After pasting, wait 5 seconds, then check your HDMI monitor.
+It should show Melvin's status screen updating every 3 seconds!
+

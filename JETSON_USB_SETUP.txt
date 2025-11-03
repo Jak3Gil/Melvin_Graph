@@ -1,0 +1,158 @@
+═══════════════════════════════════════════════════════════════════
+JETSON USB NETWORK SETUP
+═══════════════════════════════════════════════════════════════════
+
+CURRENT STATUS:
+  ✓ USB Serial Connected: /dev/cu.usbmodem14217250286373
+  ✗ Network Not Responding: 169.254.123.100
+
+═══════════════════════════════════════════════════════════════════
+OPTION 1: SERIAL CONSOLE CONNECTION (RECOMMENDED)
+═══════════════════════════════════════════════════════════════════
+
+1. Connect to Jetson via serial:
+   screen /dev/cu.usbmodem14217250286373 115200
+
+2. Login:
+   Username: melvin
+   Password: 123456
+
+3. Check USB network interface:
+   ip addr show
+
+4. Configure USB ethernet (if not already):
+   sudo ip addr add 169.254.123.100/16 dev usb0
+   sudo ip link set usb0 up
+
+   Or permanently via netplan:
+   sudo nano /etc/netplan/50-usb.yaml
+   
+   Add:
+   network:
+     version: 2
+     ethernets:
+       usb0:
+         addresses: [169.254.123.100/16]
+   
+   sudo netplan apply
+
+5. Test from Jetson:
+   ping 169.254.123.1
+
+6. Exit serial console:
+   Ctrl+A, then K, then Y
+
+7. From Mac, test connection:
+   ping 169.254.123.100
+
+8. If working, deploy:
+   ./deploy_jetson.sh
+
+═══════════════════════════════════════════════════════════════════
+OPTION 2: MANUAL FILE TRANSFER
+═══════════════════════════════════════════════════════════════════
+
+Package created: melvinos_jetson.tar.gz (17 KB)
+
+A. Via Serial Console (small files):
+   1. Connect via screen (as above)
+   2. On Jetson: mkdir -p ~/melvinos && cd ~/melvinos
+   3. Use sz/rz commands or base64 transfer:
+      
+      # On Mac:
+      base64 melvinos_jetson.tar.gz | pbcopy
+      
+      # On Jetson (in serial):
+      base64 -d > melvinos_jetson.tar.gz
+      # Paste clipboard
+      # Press Ctrl+D
+      
+      tar -xzf melvinos_jetson.tar.gz
+      cd jetson_deploy
+
+B. Via SD Card:
+   1. Copy melvinos_jetson.tar.gz to SD card
+   2. Insert SD card into Jetson
+   3. Mount: sudo mount /dev/mmcblk1p1 /mnt
+   4. Copy: cp /mnt/melvinos_jetson.tar.gz ~/
+   5. Extract and build
+
+C. Via USB Storage Mode:
+   1. Put Jetson in recovery mode
+   2. Mount as storage device
+   3. Copy files directly
+
+═══════════════════════════════════════════════════════════════════
+OPTION 3: ALTERNATIVE NETWORK CONNECTION
+═══════════════════════════════════════════════════════════════════
+
+A. WiFi:
+   Connect Jetson to WiFi network:
+   1. In serial console:
+      nmcli device wifi list
+      nmcli device wifi connect SSID password PASSWORD
+   2. Get IP:
+      ip addr show wlan0
+   3. Update deploy_jetson.sh with new IP
+
+B. Ethernet:
+   Connect Jetson to same network as Mac via ethernet cable
+   1. Get Jetson IP: ip addr show eth0
+   2. Update deploy_jetson.sh with new IP
+
+═══════════════════════════════════════════════════════════════════
+QUICK DEPLOY (ONCE NETWORK WORKS)
+═══════════════════════════════════════════════════════════════════
+
+# Test connection first
+ping -c 3 169.254.123.100
+
+# If responds, deploy
+./deploy_jetson.sh
+
+# Or manual:
+scp melvinos_jetson.tar.gz melvin@169.254.123.100:~/
+ssh melvin@169.254.123.100
+cd ~
+tar -xzf melvinos_jetson.tar.gz
+cd jetson_deploy
+make -f Makefile_daemon
+make
+sudo ./melvind
+
+═══════════════════════════════════════════════════════════════════
+TROUBLESHOOTING
+═══════════════════════════════════════════════════════════════════
+
+Issue: Cannot connect via serial
+→ Check: ls -la /dev/cu.* | grep usb
+→ Try: sudo screen /dev/cu.usbmodem14217250286373 115200
+
+Issue: USB network interface not available
+→ Check on Jetson: lsmod | grep usb
+→ Load module: sudo modprobe g_ether
+→ Or: sudo modprobe rndis_host
+
+Issue: IP not responding
+→ Check Jetson firewall: sudo ufw status
+→ Disable temporarily: sudo ufw disable
+→ Check SSH: sudo systemctl status ssh
+
+Issue: Mac can't reach 169.254.x.x network
+→ Add route: sudo route add -net 169.254.0.0/16 -interface en0
+→ Or use USB interface name from ifconfig
+
+═══════════════════════════════════════════════════════════════════
+CURRENT SERIAL DEVICE
+═══════════════════════════════════════════════════════════════════
+
+/dev/cu.usbmodem14217250286373
+
+To connect:
+  screen /dev/cu.usbmodem14217250286373 115200
+
+To exit screen:
+  Ctrl+A, then type :quit
+
+═══════════════════════════════════════════════════════════════════
+

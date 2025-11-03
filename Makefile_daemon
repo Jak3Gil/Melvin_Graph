@@ -1,0 +1,58 @@
+# Makefile for MelvinOS Daemon
+
+CC = gcc
+CFLAGS = -O2 -Wall -Wextra -std=c99 -D_GNU_SOURCE
+
+# Linux needs -lrt, macOS doesn't
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+    LDFLAGS = -lrt -lpthread
+else
+    LDFLAGS = -lpthread
+endif
+
+DAEMON_OBJS = melvind_main.o shm_bridge.o proc_monitor.o sys_monitor.o \
+              log_monitor.o net_monitor.o can_monitor.o
+
+all: melvind
+
+melvind: $(DAEMON_OBJS)
+	$(CC) $(CFLAGS) -o $@ $(DAEMON_OBJS) $(LDFLAGS)
+
+melvind_main.o: melvind_main.c melvin_protocol.h shm_bridge.h proc_monitor.h \
+                sys_monitor.h log_monitor.h net_monitor.h can_monitor.h
+	$(CC) $(CFLAGS) -c melvind_main.c
+
+shm_bridge.o: shm_bridge.c shm_bridge.h melvin_protocol.h
+	$(CC) $(CFLAGS) -c shm_bridge.c
+
+proc_monitor.o: proc_monitor.c proc_monitor.h melvin_protocol.h shm_bridge.h
+	$(CC) $(CFLAGS) -c proc_monitor.c
+
+sys_monitor.o: sys_monitor.c sys_monitor.h melvin_protocol.h shm_bridge.h
+	$(CC) $(CFLAGS) -c sys_monitor.c
+
+log_monitor.o: log_monitor.c log_monitor.h melvin_protocol.h shm_bridge.h
+	$(CC) $(CFLAGS) -c log_monitor.c
+
+net_monitor.o: net_monitor.c net_monitor.h melvin_protocol.h shm_bridge.h
+	$(CC) $(CFLAGS) -c net_monitor.c
+
+can_monitor.o: can_monitor.c can_monitor.h melvin_protocol.h shm_bridge.h
+	$(CC) $(CFLAGS) -c can_monitor.c
+
+clean:
+	rm -f $(DAEMON_OBJS) melvind
+
+clean-shm:
+	rm -f /dev/shm/melvin_rx /dev/shm/melvin_tx
+
+install: melvind
+	cp melvind /usr/local/bin/
+	chmod +x /usr/local/bin/melvind
+
+uninstall:
+	rm -f /usr/local/bin/melvind
+
+.PHONY: all clean clean-shm install uninstall
+

@@ -1,0 +1,82 @@
+╔══════════════════════════════════════════════════════════════╗
+║           MELVIN JETSON - QUICK REFERENCE                    ║
+╚══════════════════════════════════════════════════════════════╝
+
+📡 CONNECTION
+─────────────────────────────────────────────────────────────
+Network:   169.254.123.100
+User:      melvin
+Password:  123456
+
+SSH:       ssh melvin@169.254.123.100
+Serial:    screen /dev/cu.usbmodem14217250286373 115200
+
+
+✅ CURRENT STATUS
+─────────────────────────────────────────────────────────────
+✓ MelvinD Daemon     - RUNNING (collecting sensor data)
+✓ Melvin Core        - RUNNING (processing & learning)
+✓ Melvin Display     - RUNNING (DisplayPort visualization)
+✓ Network            - ACTIVE (USB connection)
+✓ Auto-start on boot - ENABLED
+
+
+🚀 QUICK COMMANDS
+─────────────────────────────────────────────────────────────
+# View live logs
+ssh melvin@169.254.123.100
+sudo journalctl -u melvind -f
+tail -f /tmp/melvin_core.log
+
+# Restart services
+sudo systemctl restart melvind
+sudo systemctl restart melvin-display
+
+# Check status
+sudo systemctl status melvind
+ps aux | grep melvin
+
+
+📺 DISPLAYPORT SHOWS
+─────────────────────────────────────────────────────────────
+- Real-time thought stream
+- Graph statistics (nodes, edges, error)
+- System stats (CPU, memory, temp)
+- Recent sensor detections
+- Actions taken
+- Learning progress
+
+
+📁 FILES ON JETSON
+─────────────────────────────────────────────────────────────
+/home/melvin/melvinos/
+  - melvind          (daemon)
+  - melvin_core      (intelligence)
+  - melvin_display   (visualization)
+  - nodes.bin        (persistent graph)
+  - edges.bin        (persistent connections)
+
+
+🔄 REDEPLOY FROM MAC
+─────────────────────────────────────────────────────────────
+cd /Users/jakegilbert/Desktop/single_mel_file
+./deploy_jetson.sh
+
+
+🆘 IF NETWORK FAILS
+─────────────────────────────────────────────────────────────
+# Connect via serial
+screen /dev/cu.usbmodem14217250286373 115200
+
+# On Jetson:
+sudo ip addr add 169.254.123.100/16 dev usb0
+sudo ip link set usb0 up
+
+# From Mac:
+ping 169.254.123.100
+
+
+═══════════════════════════════════════════════════════════════
+Melvin is ALIVE and THINKING! 🧠
+═══════════════════════════════════════════════════════════════
+

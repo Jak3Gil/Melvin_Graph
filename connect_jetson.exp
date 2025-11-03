@@ -1,0 +1,96 @@
+#!/usr/bin/expect -f
+# Connect to Jetson via USB serial and run setup commands
+
+set timeout 30
+set serial_port "/dev/cu.usbmodem14217250286373"
+set username "melvin"
+set password "123456"
+
+# Connect to serial port
+spawn screen $serial_port 115200
+
+# Wait for login prompt or shell
+expect {
+    "login:" {
+        send "$username\r"
+        expect "Password:"
+        send "$password\r"
+    }
+    "melvin@" {
+        # Already logged in
+    }
+    "# " {
+        # Already at root prompt
+    }
+    timeout {
+        send "\r"
+        exp_continue
+    }
+}
+
+# Wait for shell prompt
+expect {
+    -re ".*\[$#] " {}
+    timeout { send "\r"; exp_continue }
+}
+
+# Check current directory and system info
+send "whoami\r"
+expect -re ".*\[$#] "
+
+send "pwd\r"
+expect -re ".*\[$#] "
+
+send "uname -a\r"
+expect -re ".*\[$#] "
+
+# Check network interface
+send "ip addr show\r"
+expect -re ".*\[$#] "
+
+# Check if melvinos directory exists
+send "ls -la ~/melvinos\r"
+expect -re ".*\[$#] "
+
+# Check if USB network is configured
+send "ip addr show usb0 2>/dev/null || echo 'USB network not configured'\r"
+expect -re ".*\[$#] "
+
+# Configure USB network if needed
+send "sudo ip addr add 169.254.123.100/16 dev usb0 2>/dev/null || echo 'IP already configured or interface not found'\r"
+expect {
+    "password" {
+        send "$password\r"
+        expect -re ".*\[$#] "
+    }
+    -re ".*\[$#] " {}
+}
+
+send "sudo ip link set usb0 up 2>/dev/null || echo 'Interface already up or not found'\r"
+expect {
+    "password" {
+        send "$password\r"
+        expect -re ".*\[$#] "
+    }
+    -re ".*\[$#] " {}
+}
+
+# Check display setup
+send "ls -la /dev/fb* 2>/dev/null || echo 'No framebuffer devices'\r"
+expect -re ".*\[$#] "
+
+send "echo 'DISPLAY='$DISPLAY\r"
+expect -re ".*\[$#] "
+
+# Check if melvin_core is running
+send "ps aux | grep -E '(melvin|melvind)' | grep -v grep\r"
+expect -re ".*\[$#] "
+
+send "echo ''\r"
+send "echo '=== Jetson Connection Successful ==='\r"
+send "echo 'Ready to deploy files and start services'\r"
+expect -re ".*\[$#] "
+
+# Keep session open
+interact
+
