@@ -336,42 +336,50 @@ int main() {
         return 1;
     }
     
+    // MINIMAL ALLOCATION - Only what we need + small growth buffer
+    uint32_t node_cap = node_count + 256;   // Small growth buffer
+    uint32_t edge_cap = edge_count + 1024;  // Small growth buffer
+    
     GraphFileHeader header = {0};
     header.magic = 0xBEEF2024;
     header.node_count = node_count;
-    header.node_cap = 10000;
+    header.node_cap = node_cap;
     header.next_node_id = node_count + 1;
     header.edge_count = edge_count;
-    header.edge_cap = 100000;
+    header.edge_cap = edge_cap;
     header.module_count = 0;
     header.module_cap = 64;
     header.tick = 0;
-    header.hot_node_cap = 10000;
+    header.hot_node_cap = node_cap;
     header.cold_enabled = 0;
     
     fwrite(&header, sizeof(GraphFileHeader), 1, f);
-    fwrite(nodes, sizeof(Node), 10000, f);
-    fwrite(edges, sizeof(Edge), 100000, f);
+    fwrite(nodes, sizeof(Node), node_cap, f);
+    fwrite(edges, sizeof(Edge), edge_cap, f);
     
     // Write modules (empty for now)
     uint8_t empty_modules[64 * 512] = {0};  // 64 modules max
     fwrite(empty_modules, 64 * 512, 1, f);
     
-    // Write auxiliary arrays
-    fwrite(node_theta, sizeof(float), 10000, f);
-    fwrite(node_memory_value, sizeof(float), 10000, f);
+    // Write auxiliary arrays (ONLY for actual capacity!)
+    fwrite(node_theta, sizeof(float), node_cap, f);
+    fwrite(node_memory_value, sizeof(float), node_cap, f);
     
-    uint32_t empty_ages[10000] = {0};
-    fwrite(empty_ages, sizeof(uint32_t), 10000, f);
-    fwrite(node_flags, sizeof(uint32_t), 10000, f);
+    uint32_t *empty_ages = calloc(node_cap, sizeof(uint32_t));
+    fwrite(empty_ages, sizeof(uint32_t), node_cap, f);
+    free(empty_ages);
     
-    // Write empty extended data
-    uint8_t empty_ext[10000 * 64] = {0};  // NodeExt is ~64 bytes
-    fwrite(empty_ext, 64, 10000, f);
+    fwrite(node_flags, sizeof(uint32_t), node_cap, f);
     
-    // Write empty access info
-    uint8_t empty_access[10000 * 8] = {0};  // NodeAccessInfo is 8 bytes
-    fwrite(empty_access, 8, 10000, f);
+    // Write empty extended data (ONLY for actual capacity!)
+    uint8_t *empty_ext = calloc(node_cap, 64);
+    fwrite(empty_ext, 64, node_cap, f);
+    free(empty_ext);
+    
+    // Write empty access info (ONLY for actual capacity!)
+    uint8_t *empty_access = calloc(node_cap, 8);
+    fwrite(empty_access, 8, node_cap, f);
+    free(empty_access);
     
     fclose(f);
     
@@ -379,12 +387,27 @@ int main() {
     printf("║  ✅ BOOTSTRAP COMPLETE!                                       ║\n");
     printf("╚══════════════════════════════════════════════════════════════╝\n\n");
     
+    size_t actual_size = sizeof(GraphFileHeader) + 
+                        node_cap*sizeof(Node) + 
+                        edge_cap*sizeof(Edge) +
+                        64*512 +  // modules
+                        node_cap*sizeof(float)*2 +  // theta, memory_value
+                        node_cap*sizeof(uint32_t)*2 + // ages, flags
+                        node_cap*64 +  // ext
+                        node_cap*8;    // access_info
+    
     printf("📊 GRAPH STATISTICS:\n");
-    printf("  Nodes created: %u\n", node_count);
-    printf("  Edges created: %u\n", edge_count);
-    printf("  File size: ~%zu MB\n", 
-           (sizeof(GraphFileHeader) + 10000*sizeof(Node) + 100000*sizeof(Edge) + 
-            10000*4*sizeof(float) + 10000*2*sizeof(uint32_t) + 10000*64 + 10000*8) / (1024*1024));
+    printf("  Nodes: %u (capacity: %u)\n", node_count, node_cap);
+    printf("  Edges: %u (capacity: %u)\n", edge_count, edge_cap);
+    printf("  File size: %zu KB (%.2f MB)\n", actual_size/1024, actual_size/(1024.0*1024.0));
+    printf("\n  Breakdown:\n");
+    printf("    Core data:   %5.1f KB (%u nodes × 24 + %u edges × 10)\n", 
+           (node_count*24.0 + edge_count*10.0)/1024.0, node_count, edge_count);
+    printf("    Growth buffer: %5.1f KB (space for %u more nodes, %u more edges)\n",
+           ((node_cap-node_count)*24.0 + (edge_cap-edge_count)*10.0)/1024.0,
+           node_cap-node_count, edge_cap-edge_count);
+    printf("    Aux arrays:  %5.1f KB (parameters, metadata per node)\n",
+           (node_cap*(4+4+4+4+64+8))/1024.0);
     
     printf("\n🎯 CIRCUITS IN GRAPH:\n");
     printf("  1. Parameter nodes (28)\n");
