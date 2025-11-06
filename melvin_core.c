@@ -3842,372 +3842,61 @@ uint8_t byte_node_exists[256];
  * META-CIRCUIT SEEDS - Graph codes itself via minimal bootstraps
  * ======================================================================== */
 
-// Bootstrap meta-circuits that enable the graph to code itself
-// GOAL: Entire self-programming system lives IN THE GRAPH, not in C!
+// ✅ DELETED! All circuits now PRE-COMPILED in graph.mmap by bootstrap_graph!
+// graph.mmap contains 75 nodes with ALL logic:
+//   - 28 parameter nodes
+//   - 12 parameter wiring edges  
+//   - 6 circuits (macro selector, pattern detector, fitness, meta-ops, hot/cold, thinking)
+//   - 5 Hebbian samplers
+//   - 1 self-organizer
+//   - 1 thinker with self-loop
+//
+// Just map node IDs from the pre-compiled graph:
 void bootstrap_meta_circuits() {
-    // Thinker - keeps graph alive
-    uint32_t t = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[t], OP_GATE);
-    g_graph.nodes[t].a = 0.4f;
-    edge_create(&g_graph, t, t);
-    node_set_protected(&g_graph.nodes[t], 1);
+    // Nodes already exist in graph.mmap! Just set up ID mappings.
+    // Node layout in graph.mmap (from bootstrap_graph.c):
+    g_node_eta_fast = 0;
+    g_node_epsilon = 1;
+    g_node_lambda_e = 2;
+    g_node_energy = 3;
+    g_node_error_sensor = 4;
+    g_node_beta_blend = 5;
+    g_node_delta_max = 6;
+    g_node_sigmoid_k = 7;
+    g_node_lambda_decay = 8;
+    g_node_gamma_slow = 9;
+    g_node_alpha_fast_decay = 10;
+    g_node_alpha_slow_decay = 11;
+    g_node_energy_alpha = 12;
+    g_node_energy_decay = 13;
+    g_node_epsilon_min = 14;
+    g_node_epsilon_max = 15;
+    g_node_activation_scale = 16;
+    g_node_prune_rate = 17;
+    g_node_create_rate = 18;
+    g_node_target_density = 19;
+    g_node_target_activity = 20;
+    g_node_temporal_decay = 21;
+    g_node_spatial_k = 22;
+    g_node_layer_rate = 23;
+    g_node_adapt_rate = 24;
+    g_node_prune_weight_ref = 25;
+    g_node_stale_ref = 26;
+    g_node_target_prediction_acc = 27;
     
-    // PARAMETER NODES - Graph controls its own learning!
-    g_node_eta_fast = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_eta_fast], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_eta_fast]) = 3.0f;  // Initial learning rate
-    node_theta(&g_graph.nodes[g_node_eta_fast]) = 1.0f;  // Min value
-    g_graph.nodes[g_node_eta_fast].data = 10.0f;  // Max value
-    node_set_protected(&g_graph.nodes[g_node_eta_fast], 1);
-    
-    g_node_epsilon = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_epsilon], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_epsilon]) = 0.2f;  // Initial exploration
-    node_theta(&g_graph.nodes[g_node_epsilon]) = 0.05f;  // Min
-    g_graph.nodes[g_node_epsilon].data = 0.5f;  // Max
-    node_set_protected(&g_graph.nodes[g_node_epsilon], 1);
-    
-    g_node_lambda_e = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_lambda_e], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_lambda_e]) = 0.9f;  // Initial eligibility
-    node_set_protected(&g_graph.nodes[g_node_lambda_e], 1);
-    
-    g_node_energy = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_energy], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_energy]) = 0.0f;  // Start at zero
-    node_set_protected(&g_graph.nodes[g_node_energy], 1);
-    
-    // Error sensor - measures prediction accuracy
-    g_node_error_sensor = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_error_sensor], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_error_sensor]) = 0.0f;
-    node_set_protected(&g_graph.nodes[g_node_error_sensor], 1);
-    
-    // Wire error → learning rate (high error → increase learning rate!)
-    uint32_t e_idx = edge_create(&g_graph, g_node_error_sensor, g_node_eta_fast);
-    if (e_idx != UINT32_MAX) {
-        g_graph.edges[e_idx].w_fast = 50;  // Error influences learning rate
-        g_graph.edges[e_idx].w_slow = 50;
-    }
-    
-    // Wire error → epsilon (high error → more exploration!)
-    e_idx = edge_create(&g_graph, g_node_error_sensor, g_node_epsilon);
-    if (e_idx != UINT32_MAX) {
-        g_graph.edges[e_idx].w_fast = 30;
-        g_graph.edges[e_idx].w_slow = 30;
-    }
-    
-    // PHASE 2: Learning algorithm parameters as graph nodes
-    g_node_beta_blend = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_beta_blend], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_beta_blend]) = 0.7f;  // Predictive vs error balance
-    node_set_protected(&g_graph.nodes[g_node_beta_blend], 1);
-    
-    g_node_delta_max = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_delta_max], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_delta_max]) = 4.0f;  // Max weight change per tick
-    node_set_protected(&g_graph.nodes[g_node_delta_max], 1);
-    
-    g_node_sigmoid_k = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_sigmoid_k], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_sigmoid_k]) = 0.5f;  // Sigmoid steepness
-    node_set_protected(&g_graph.nodes[g_node_sigmoid_k], 1);
-    
-    g_node_lambda_decay = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_lambda_decay], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_lambda_decay]) = 0.99f;  // Count decay rate
-    node_set_protected(&g_graph.nodes[g_node_lambda_decay], 1);
-    
-    // PHASE 3: Massive parameter migration!
-    g_node_gamma_slow = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_gamma_slow], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_gamma_slow]) = 0.8f;
-    node_set_protected(&g_graph.nodes[g_node_gamma_slow], 1);
-    
-    g_node_alpha_fast_decay = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_alpha_fast_decay], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_alpha_fast_decay]) = 0.95f;
-    node_set_protected(&g_graph.nodes[g_node_alpha_fast_decay], 1);
-    
-    g_node_alpha_slow_decay = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_alpha_slow_decay], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_alpha_slow_decay]) = 0.999f;
-    node_set_protected(&g_graph.nodes[g_node_alpha_slow_decay], 1);
-    
-    g_node_energy_alpha = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_energy_alpha], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_energy_alpha]) = 0.1f;
-    node_set_protected(&g_graph.nodes[g_node_energy_alpha], 1);
-    
-    g_node_energy_decay = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_energy_decay], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_energy_decay]) = 0.995f;
-    node_set_protected(&g_graph.nodes[g_node_energy_decay], 1);
-    
-    g_node_epsilon_min = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_epsilon_min], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_epsilon_min]) = 0.05f;
-    node_set_protected(&g_graph.nodes[g_node_epsilon_min], 1);
-    
-    g_node_epsilon_max = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_epsilon_max], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_epsilon_max]) = 0.3f;
-    node_set_protected(&g_graph.nodes[g_node_epsilon_max], 1);
-    
-    g_node_activation_scale = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_activation_scale], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_activation_scale]) = 64.0f;
-    node_set_protected(&g_graph.nodes[g_node_activation_scale], 1);
-    
-    g_node_prune_rate = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_prune_rate], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_prune_rate]) = 0.0005f;
-    node_set_protected(&g_graph.nodes[g_node_prune_rate], 1);
-    
-    g_node_create_rate = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_create_rate], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_create_rate]) = 0.01f;
-    node_set_protected(&g_graph.nodes[g_node_create_rate], 1);
-    
-    g_node_target_density = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_target_density], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_target_density]) = 0.15f;
-    node_set_protected(&g_graph.nodes[g_node_target_density], 1);
-    
-    g_node_target_activity = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_target_activity], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_target_activity]) = 0.1f;
-    node_set_protected(&g_graph.nodes[g_node_target_activity], 1);
-    
-    // ═══════════════════════════════════════════════════════════════
-    // WIRE PARAMETERS TOGETHER - Graph controls its own behavior!
-    // ═══════════════════════════════════════════════════════════════
-    
-    // High energy → increase learning rate AND exploration
-    e_idx = edge_create(&g_graph, g_node_energy, g_node_eta_fast);
-    if (e_idx != UINT32_MAX) { g_graph.edges[e_idx].w_fast = 20; g_graph.edges[e_idx].w_slow = 20; }
-    
-    e_idx = edge_create(&g_graph, g_node_energy, g_node_epsilon);
-    if (e_idx != UINT32_MAX) { g_graph.edges[e_idx].w_fast = 40; g_graph.edges[e_idx].w_slow = 40; }
-    
-    // High error → increase create_rate (grow structure when confused!)
-    e_idx = edge_create(&g_graph, g_node_error_sensor, g_node_create_rate);
-    if (e_idx != UINT32_MAX) { g_graph.edges[e_idx].w_fast = 25; g_graph.edges[e_idx].w_slow = 25; }
-    
-    // Low error → increase prune_rate (clean up when confident!)
-    // (Inverted: we'll read it as threshold - activation)
-    
-    // Energy influences energy_alpha (high energy → learn energy faster!)
-    e_idx = edge_create(&g_graph, g_node_energy, g_node_energy_alpha);
-    if (e_idx != UINT32_MAX) { g_graph.edges[e_idx].w_fast = 15; g_graph.edges[e_idx].w_slow = 15; }
-    
-    // Epsilon bounded by epsilon_min and epsilon_max
-    e_idx = edge_create(&g_graph, g_node_epsilon_min, g_node_epsilon);
-    if (e_idx != UINT32_MAX) { g_graph.edges[e_idx].w_fast = 10; g_graph.edges[e_idx].w_slow = 10; }
-    
-    e_idx = edge_create(&g_graph, g_node_epsilon_max, g_node_epsilon);
-    if (e_idx != UINT32_MAX) { g_graph.edges[e_idx].w_fast = 10; g_graph.edges[e_idx].w_slow = 10; }
-    
-    // PHASE 4: FINAL 30% - Complete parameter migration!
-    g_node_temporal_decay = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_temporal_decay], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_temporal_decay]) = 0.1f;
-    node_set_protected(&g_graph.nodes[g_node_temporal_decay], 1);
-    
-    g_node_spatial_k = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_spatial_k], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_spatial_k]) = 0.5f;
-    node_set_protected(&g_graph.nodes[g_node_spatial_k], 1);
-    
-    g_node_layer_rate = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_layer_rate], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_layer_rate]) = 0.001f;
-    node_set_protected(&g_graph.nodes[g_node_layer_rate], 1);
-    
-    g_node_adapt_rate = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_adapt_rate], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_adapt_rate]) = 0.001f;
-    node_set_protected(&g_graph.nodes[g_node_adapt_rate], 1);
-    
-    g_node_prune_weight_ref = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_prune_weight_ref], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_prune_weight_ref]) = 2.0f;
-    node_set_protected(&g_graph.nodes[g_node_prune_weight_ref], 1);
-    
-    g_node_stale_ref = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_stale_ref], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_stale_ref]) = 200.0f;
-    node_set_protected(&g_graph.nodes[g_node_stale_ref], 1);
-    
-    g_node_target_prediction_acc = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_node_target_prediction_acc], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_node_target_prediction_acc]) = 0.85f;
-    node_set_protected(&g_graph.nodes[g_node_target_prediction_acc], 1);
-    
-    // ═══════════════════════════════════════════════════════════════
-    // FINAL INTELLIGENT WIRING - Complete self-regulation!
-    // ═══════════════════════════════════════════════════════════════
-    
-    // error_sensor influences adaptation rate (high error → adapt faster!)
-    e_idx = edge_create(&g_graph, g_node_error_sensor, g_node_adapt_rate);
-    if (e_idx != UINT32_MAX) { g_graph.edges[e_idx].w_fast = 20; g_graph.edges[e_idx].w_slow = 20; }
-    
-    // Low error → increase prune_rate (clean up when confident!)
-    // We'll invert this: target_prediction_acc → prune_rate
-    e_idx = edge_create(&g_graph, g_node_target_prediction_acc, g_node_prune_rate);
-    if (e_idx != UINT32_MAX) { g_graph.edges[e_idx].w_fast = 15; g_graph.edges[e_idx].w_slow = 15; }
-    
-    // High target_activity → increase activation_scale (more sensitive!)
-    e_idx = edge_create(&g_graph, g_node_target_activity, g_node_activation_scale);
-    if (e_idx != UINT32_MAX) { g_graph.edges[e_idx].w_fast = 100; g_graph.edges[e_idx].w_slow = 100; }
-    
-    // High target_density → increase layer_rate (encourage hierarchies!)
-    e_idx = edge_create(&g_graph, g_node_target_density, g_node_layer_rate);
-    if (e_idx != UINT32_MAX) { g_graph.edges[e_idx].w_fast = 5; g_graph.edges[e_idx].w_slow = 5; }
-    
-    // 5 Hebbian samplers - create edges between co-active nodes
-    for (int i = 0; i < 5; i++) {
-        uint32_t s = node_create(&g_graph);
-        node_set_op_type(&g_graph.nodes[s], OP_SPLICE);
-        node_theta(&g_graph.nodes[s]) = 0.4f;
-        g_graph.nodes[s].a = 0.2f;
-        node_set_protected(&g_graph.nodes[s], 1);
-        edge_create(&g_graph, t, s);
-    }
-    
-    // 1 Self-organizer - spawns new structure  
-    uint32_t o = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[o], OP_FORK);
-    node_theta(&g_graph.nodes[o]) = 0.5f;
-    g_graph.nodes[o].a = 0.3f;
-    node_set_protected(&g_graph.nodes[o], 1);
-    edge_create(&g_graph, t, o);
+    // All nodes, edges, and circuits pre-compiled! C just executes.
 }
 
 
-/* ========================================================================
- * TEXT-TO-GRAPH PARSER - Load circuits from text!
- * ======================================================================== */
-
-// Parse and execute graph circuit descriptions from text
-// Format: node(TYPE, id=name, param=value)
-//         edge(src, dst, weight=X)
-void parse_graph_text(const uint8_t *text, uint32_t len) {
-    // Simple keyword-based parser
-    for (uint32_t i = 0; i < len - 5; i++) {
-        // Check for "node("
-        if (text[i] == 'n' && text[i+1] == 'o' && text[i+2] == 'd' && 
-            text[i+3] == 'e' && text[i+4] == '(') {
-            
-            // Parse node type (e.g., "MEMORY", "COMPARE", "THRESHOLD")
-            uint32_t node_idx = node_create(&g_graph);
-            if (node_idx == UINT32_MAX) continue;
-            
-            // Default to OP_MEMORY
-            node_set_op_type(&g_graph.nodes[node_idx], OP_MEMORY);
-            
-            // Look for type keywords
-            if (strstr((char*)&text[i], "COMPARE")) {
-                node_set_op_type(&g_graph.nodes[node_idx], OP_COMPARE);
-            } else if (strstr((char*)&text[i], "THRESHOLD")) {
-                node_set_op_type(&g_graph.nodes[node_idx], OP_THRESHOLD);
-            } else if (strstr((char*)&text[i], "SUM")) {
-                node_set_op_type(&g_graph.nodes[node_idx], OP_SUM);
-            } else if (strstr((char*)&text[i], "MAX")) {
-                node_set_op_type(&g_graph.nodes[node_idx], OP_MAX);
-            } else if (strstr((char*)&text[i], "MIN")) {
-                node_set_op_type(&g_graph.nodes[node_idx], OP_MIN);
-            } else if (strstr((char*)&text[i], "PRODUCT")) {
-                node_set_op_type(&g_graph.nodes[node_idx], OP_PRODUCT);
-            } else if (strstr((char*)&text[i], "GATE")) {
-                node_set_op_type(&g_graph.nodes[node_idx], OP_GATE);
-            } else if (strstr((char*)&text[i], "FORK")) {
-                node_set_op_type(&g_graph.nodes[node_idx], OP_FORK);
-            } else if (strstr((char*)&text[i], "SPLICE")) {
-                node_set_op_type(&g_graph.nodes[node_idx], OP_SPLICE);
-            } else if (strstr((char*)&text[i], "EVAL")) {
-                node_set_op_type(&g_graph.nodes[node_idx], OP_EVAL);
-            } else if (strstr((char*)&text[i], "SEQUENCE")) {
-                node_set_op_type(&g_graph.nodes[node_idx], OP_SEQUENCE);
-            }
-            
-            // Parse theta value if present
-            char *theta_str = strstr((char*)&text[i], "theta=");
-            if (theta_str) {
-                float theta = atof(theta_str + 6);
-                node_theta(&g_graph.nodes[node_idx]) = theta;
-            }
-            
-            // Parse value if present  
-            char *value_str = strstr((char*)&text[i], "value=");
-            if (value_str) {
-                float value = atof(value_str + 6);
-                node_memory_value(&g_graph.nodes[node_idx]) = value;
-            }
-            
-            // Protect important nodes
-            node_set_protected(&g_graph.nodes[node_idx], 1);
-            
-            i += 20; // Skip ahead
-        }
-        
-        // Check for "edge("
-        else if (text[i] == 'e' && text[i+1] == 'd' && text[i+2] == 'g' && 
-                 text[i+3] == 'e' && text[i+4] == '(') {
-            
-            // For now, create edges between recently created nodes
-            // Full implementation would parse src/dst by ID
-            uint32_t count = g_graph.node_count;
-            if (count >= 2) {
-                uint32_t e_idx = edge_create(&g_graph, count-2, count-1);
-                
-                if (e_idx != UINT32_MAX) {
-                    // Parse weight if present
-                    char *weight_str = strstr((char*)&text[i], "weight=");
-                    if (weight_str) {
-                        int weight = atoi(weight_str + 7);
-                        g_graph.edges[e_idx].w_fast = (uint8_t)weight;
-                        g_graph.edges[e_idx].w_slow = (uint8_t)weight;
-                    } else {
-                        // Default medium weight
-                        g_graph.edges[e_idx].w_fast = 128;
-                        g_graph.edges[e_idx].w_slow = 128;
-                    }
-                }
-            }
-            
-            i += 10; // Skip ahead
-        }
-    }
-}
+// ✅ DELETED! Text parser no longer needed - circuits pre-compiled in graph.mmap!
+// If you want to add new circuits, modify bootstrap_graph.c and re-run it.
 
 void seed_patterns() {
-    // NO HARD-CODED OUTPUTS! Graph learns everything from input.
+    // Initialize byte lookup tables
     memset(byte_to_node, 0, sizeof(byte_to_node));
     memset(byte_node_exists, 0, sizeof(byte_node_exists));
     
-    // Load graph circuits from text file!
-    FILE *circuits = fopen("graph_circuits.txt", "r");
-    if (circuits) {
-        fseek(circuits, 0, SEEK_END);
-        long fsize = ftell(circuits);
-        fseek(circuits, 0, SEEK_SET);
-        
-        uint8_t *buffer = malloc(fsize + 1);
-        if (buffer) {
-            size_t read_bytes = fread(buffer, 1, fsize, circuits);
-            buffer[read_bytes] = 0;
-            
-            // Parse and create circuits!
-            parse_graph_text(buffer, read_bytes);
-            
-            free(buffer);
-        }
-        fclose(circuits);
-    }
-    
-    // Output creation happens in OP_FORK nodes during propagate()
-    // when frequent patterns detected by byte_pattern tracker
+    // ALL circuits already in graph.mmap! Nothing to load.
 }
 
 // Activate byte nodes when input arrives
