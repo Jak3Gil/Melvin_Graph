@@ -722,12 +722,12 @@ static inline float execute_node_operation(Node *n) {
             op_cost = 100;
             if (node_soma(n) > node_theta(n)) {
                 
-                // BEHAVIOR 1: Hebbian Edge Creation (co-active node wiring)
-                if (node_theta(n) < 0.6f && randf() < 0.15f) { // 15% chance for Hebbian
+                // Hebbian Edge Creation - wire co-active nodes
+                if (randf() < 0.10f) {
                     uint32_t src = rand() % g_graph.node_count;
                     uint32_t dst = rand() % g_graph.node_count;
                     
-                    if (src != dst && g_graph.nodes[src].a > 0.4f && g_graph.nodes[dst].a > 0.4f) {
+                    if (src != dst && g_graph.nodes[src].a > 0.5f && g_graph.nodes[dst].a > 0.5f) {
                         Edge *existing = find_edge(&g_graph, src, dst);
                         if (!existing) {
                             uint32_t e_idx = edge_create(&g_graph, src, dst);
@@ -735,48 +735,30 @@ static inline float execute_node_operation(Node *n) {
                                 float co_act = g_graph.nodes[src].a * g_graph.nodes[dst].a;
                                 g_graph.edges[e_idx].w_fast = (uint8_t)(co_act * 120.0f);
                                 g_graph.edges[e_idx].w_slow = (uint8_t)(co_act * 100.0f);
-                                
-                                printf("[GRAPH→CODE] OP_SPLICE Node[%u] created edge: Node[%u]→Node[%u] (%.2f)\n",
-                                       (uint32_t)(n - g_graph.nodes), src, dst, co_act);
                                 result = 1.0f;
                             }
                         }
                     }
                 }
-                // BEHAVIOR 2: Output Node Creation (DISABLED - too noisy)
-                // Let seed_patterns() create structured outputs instead
             }
             break;
             
         case OP_FORK:
-            // GRAPH-DRIVEN NODE CREATION: Creates OUTPUT nodes or computation nodes!
-            // Special behavior based on theta - THIS IS GRAPH CODING!
+            // GRAPH-DRIVEN NODE SPAWNING: Creates nodes when patterns detected
             op_cost = 80;
-            if (node_soma(n) > node_theta(n) && randf() < 0.10f) { // 10% chance when active
+            if (node_soma(n) > node_theta(n) && randf() < 0.05f) {
+                // Spawn computation nodes between highly active pairs
+                uint32_t node_a = rand() % g_graph.node_count;
+                uint32_t node_b = rand() % g_graph.node_count;
                 
-                // HIGH THETA (>0.5): Create OUTPUT nodes (response generation)
-                // LOW THETA (<0.5): Create computation nodes (circuit building)
-                
-                {
-                    // CIRCUIT BUILDING MODE - Create computation nodes
-                    uint32_t node_a = rand() % g_graph.node_count;
-                    uint32_t node_b = rand() % g_graph.node_count;
-                    
-                    if (node_a != node_b && g_graph.nodes[node_a].a > 0.5f && g_graph.nodes[node_b].a > 0.5f) {
-                        uint32_t new_idx = node_create(&g_graph);
-                        if (new_idx != UINT32_MAX) {
-                            uint8_t new_op = (uint8_t)(node_soma(n) * NUM_OPS) % NUM_OPS;
-                            node_set_op_type(&g_graph.nodes[new_idx], new_op);
-                            
-                            edge_create(&g_graph, node_a, new_idx);
-                            edge_create(&g_graph, new_idx, node_b);
-                            
-                            printf("[GRAPH→CODE] OP_FORK Node[%u] spawned computation Node[%u] (%s) Node[%u]↔Node[%u]\n",
-                                   (uint32_t)(n - g_graph.nodes), new_idx,
-                                   new_op == OP_SUM ? "SUM" : new_op == OP_GATE ? "GATE" : new_op == OP_THRESHOLD ? "THRESH" : "OTHER",
-                                   node_a, node_b);
-                            result = 1.0f;
-                        }
+                if (node_a != node_b && g_graph.nodes[node_a].a > 0.6f && g_graph.nodes[node_b].a > 0.6f) {
+                    uint32_t new_idx = node_create(&g_graph);
+                    if (new_idx != UINT32_MAX) {
+                        uint8_t new_op = (uint8_t)(node_soma(n) * NUM_OPS) % NUM_OPS;
+                        node_set_op_type(&g_graph.nodes[new_idx], new_op);
+                        edge_create(&g_graph, node_a, new_idx);
+                        edge_create(&g_graph, new_idx, node_b);
+                        result = 1.0f;
                     }
                 }
             }
@@ -1495,26 +1477,45 @@ void detect_activation_pattern() {
     }
 }
 
-// Compile a frequently seen pattern into an executable circuit (module)
+// Compile frequent pattern into output circuit (GRAPH LEARNS OUTPUTS!)
 void compile_pattern_to_circuit(ActivationPattern *pat) {
     if (pat->circuit_id != 0) return; // Already compiled
     if (pat->sequence_length < 2) return;
     
-    // Create module from this pattern
-    uint32_t mod_id = module_create(&g_graph, pat->node_sequence, pat->sequence_length);
-    if (mod_id == UINT32_MAX) return;
-    
-    pat->circuit_id = mod_id + 1;
-    
-    // Create a proxy node with OP_EVAL that will execute this circuit
-    uint32_t proxy_idx = create_module_proxy(&g_graph, pat->circuit_id);
-    if (proxy_idx != UINT32_MAX) {
-        node_set_op_type(&g_graph.nodes[proxy_idx], OP_EVAL);
-        node_set_protected(&g_graph.nodes[proxy_idx], 1); // Protect compiled circuits
-        
-        printf("[PATTERN→CIRCUIT] Compiled pattern (freq=%u, %u nodes) → Module[%u] + Proxy[%u]\n",
-               pat->frequency, pat->sequence_length, mod_id, proxy_idx);
+    // CREATE OUTPUT NODES FOR THIS PATTERN (Graph codes outputs!)
+    uint32_t output_nodes[8];
+    for (uint8_t i = 0; i < pat->sequence_length && i < 8; i++) {
+        uint32_t out_node = node_create(&g_graph);
+        if (out_node != UINT32_MAX) {
+            // Mark as output node
+            node_set_op_type(&g_graph.nodes[out_node], OP_MEMORY);
+            node_set_output(&g_graph.nodes[out_node], 1);
+            
+            // Set output byte value (from pattern node's data field)
+            uint32_t pattern_node_idx = pat->node_sequence[i];
+            if (pattern_node_idx < g_graph.node_count) {
+                float byte_val = g_graph.nodes[pattern_node_idx].data;
+                node_memory_value(&g_graph.nodes[out_node]) = byte_val;
+                node_theta(&g_graph.nodes[out_node]) = 999.0f; // Immutable
+            }
+            
+            output_nodes[i] = out_node;
+            
+            // Wire pattern node → output node (detector triggers output!)
+            edge_create(&g_graph, pattern_node_idx, out_node);
+            
+            // Wire sequential outputs (output[i] → output[i+1])
+            if (i > 0) {
+                uint32_t seq_idx = edge_create(&g_graph, output_nodes[i-1], out_node);
+                if (seq_idx != UINT32_MAX) {
+                    g_graph.edges[seq_idx].w_fast = 250;
+                    g_graph.edges[seq_idx].w_slow = 250;
+                }
+            }
+        }
     }
+    
+    pat->circuit_id = 1; // Mark as compiled
 }
 
 /* ========================================================================
@@ -3712,8 +3713,8 @@ void emit_action() {
     for (uint32_t i = 0; i < g_graph.node_count && output_len < 256; i++) {
         Node *n = &g_graph.nodes[i];
         if (node_is_output(n) && n->a > 0.5f) {  // Balanced threshold
-            uint8_t byte = (uint8_t)node_memory_value(n);
-            output_buffer[output_len++] = byte;
+                uint8_t byte = (uint8_t)node_memory_value(n);
+                output_buffer[output_len++] = byte;
         }
     }
     
@@ -3724,7 +3725,7 @@ void emit_action() {
                            memcmp(output_buffer, last_output_buffer, output_len) == 0);
         
         if (!is_duplicate) {
-            write(STDOUT_FILENO, output_buffer, output_len);
+        write(STDOUT_FILENO, output_buffer, output_len);
             write(STDOUT_FILENO, "\n", 1);
             
             // Save for deduplication
@@ -3734,8 +3735,8 @@ void emit_action() {
             
             // Mirror to TX ring and save
             ring_write(&g_sys.tx_ring, output_buffer, output_len);
-            memcpy(g_sys.last_output_frame, output_buffer, output_len);
-            g_sys.last_output_frame_len = output_len;
+        memcpy(g_sys.last_output_frame, output_buffer, output_len);
+        g_sys.last_output_frame_len = output_len;
         }
         return;
     }
@@ -4029,121 +4030,12 @@ void bootstrap_meta_circuits() {
 
 
 void seed_patterns() {
-    // Clear byte lookup table
+    // NO HARD-CODED OUTPUTS! Graph learns everything from input.
     memset(byte_to_node, 0, sizeof(byte_to_node));
     memset(byte_node_exists, 0, sizeof(byte_node_exists));
     
-    // Seed useful command→response patterns
-    typedef struct {
-        const char *cmd;
-        const char *resp;
-        float strength;
-    } PatternSeed;
-    
-    // ULTRA-MINIMAL BOOTSTRAP: Only 1 seed for validation
-    // Graph creates everything else via meta-circuits!
-    PatternSeed seeds[] = {
-        {"ping", "pong", 0.8f},   // Single validation pattern
-    };
-    int num_seeds = sizeof(seeds) / sizeof(seeds[0]);
-    
-    printf("[BOOTSTRAP] Seeding only %d validation pattern\n", num_seeds);
-    printf("[BOOTSTRAP] All other behaviors emerge from meta-circuits\n");
-    
-    for (int s = 0; s < num_seeds; s++) {
-        const char *cmd = seeds[s].cmd;
-        const char *resp = seeds[s].resp;
-        float strength = seeds[s].strength;
-        
-        int cmd_len = strlen(cmd);
-        int resp_len = strlen(resp);
-        if (cmd_len > 16 || resp_len > 16) continue;
-        
-        // Create/reuse nodes for command bytes
-        uint32_t cmd_nodes[16];
-        for (int i = 0; i < cmd_len; i++) {
-            uint8_t byte = (uint8_t)cmd[i];
-            if (byte_node_exists[byte]) {
-                cmd_nodes[i] = byte_to_node[byte];
-            } else {
-                cmd_nodes[i] = node_create(&g_graph);
-                if (cmd_nodes[i] == UINT32_MAX) continue;
-                byte_to_node[byte] = cmd_nodes[i];
-                byte_node_exists[byte] = 1;
-                
-                // Mark as byte node
-                node_theta(&g_graph.nodes[cmd_nodes[i]]) = (float)byte;
-                g_graph.nodes[cmd_nodes[i]].data = (float)byte;
-            }
-        }
-        
-        // Create detector node (fires when ALL command bytes active)
-        uint32_t detector = node_create(&g_graph);
-        if (detector == UINT32_MAX) continue;
-        
-        node_set_op_type(&g_graph.nodes[detector], OP_THRESHOLD);
-        node_theta(&g_graph.nodes[detector]) = 0.3f;  // Low threshold
-        g_graph.nodes[detector].a = 0.1f;
-        
-        // Wire ALL command bytes to detector (parallel)
-        for (int i = 0; i < cmd_len; i++) {
-            uint32_t e_idx = edge_create(&g_graph, cmd_nodes[i], detector);
-            if (e_idx != UINT32_MAX) {
-                g_graph.edges[e_idx].w_fast = 150;  // Strong
-                g_graph.edges[e_idx].w_slow = 150;
-            }
-        }
-        
-        // Create response byte nodes (outputs)
-        uint32_t resp_nodes[16];
-        for (int i = 0; i < resp_len; i++) {
-            uint8_t byte = (uint8_t)resp[i];
-            
-            // Reuse existing byte node if it exists
-            if (byte_node_exists[byte]) {
-                resp_nodes[i] = byte_to_node[byte];
-            } else {
-                resp_nodes[i] = node_create(&g_graph);
-                if (resp_nodes[i] == UINT32_MAX) continue;
-                byte_to_node[byte] = resp_nodes[i];
-                byte_node_exists[byte] = 1;
-                
-                node_theta(&g_graph.nodes[resp_nodes[i]]) = (float)byte;
-                g_graph.nodes[resp_nodes[i]].data = (float)byte;
-            }
-            
-            // Configure as output node
-            node_set_op_type(&g_graph.nodes[resp_nodes[i]], OP_MEMORY);
-            node_memory_value(&g_graph.nodes[resp_nodes[i]]) = (float)byte;
-            node_theta(&g_graph.nodes[resp_nodes[i]]) = 999.0f;  // Never write
-            node_set_output(&g_graph.nodes[resp_nodes[i]], 1);
-            g_graph.nodes[resp_nodes[i]].a = 0.05f;
-        }
-        
-        // Wire detector → response nodes
-        for (int i = 0; i < resp_len; i++) {
-            uint32_t e_idx = edge_create(&g_graph, detector, resp_nodes[i]);
-            if (e_idx != UINT32_MAX) {
-                g_graph.edges[e_idx].w_fast = 100;  // Strong enough to fire
-                g_graph.edges[e_idx].w_slow = 100;
-                edge_credit(&g_graph.edges[e_idx]) = 0;  // Neutral - will learn
-            }
-        }
-        
-        // Chain response nodes for sequential output
-        for (int i = 0; i < resp_len - 1; i++) {
-            uint32_t e_idx = edge_create(&g_graph, resp_nodes[i], resp_nodes[i+1]);
-            if (e_idx != UINT32_MAX) {
-                g_graph.edges[e_idx].w_fast = 200;
-                g_graph.edges[e_idx].w_slow = 200;
-            }
-        }
-        
-        printf("[SEED]   '%s' → '%s' (detector=Node[%u], strength=%.1f)\n",
-               cmd, resp, detector, strength);
-    }
-    
-    printf("[SEED]   ✓ %d patterns seeded\n", num_seeds);
+    // Output creation happens in OP_FORK nodes during propagate()
+    // when frequent patterns detected by byte_pattern tracker
 }
 
 // Activate byte nodes when input arrives
