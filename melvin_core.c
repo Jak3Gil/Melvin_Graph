@@ -743,64 +743,8 @@ static inline float execute_node_operation(Node *n) {
                         }
                     }
                 }
-                // BEHAVIOR 2: Output Node Creation (when theta >= 0.6, this is a response generator!)
-                else if (node_theta(n) >= 0.6f && randf() < 0.25f) { // 25% chance for output creation!
-                    // Find active byte nodes by scanning ALL nodes for byte-type nodes
-                    uint32_t active_bytes[3];
-                    uint32_t byte_count = 0;
-                    
-                    for (uint32_t i = 0; i < g_graph.node_count && byte_count < 3; i++) {
-                        Node *candidate = &g_graph.nodes[i];
-                        // A byte node has: data in [1,255] range and high activation
-                        if (candidate->a > 0.7f && 
-                            candidate->data >= 1.0f && candidate->data <= 255.0f &&
-                            node_theta(candidate) == candidate->data) { // theta == data for byte nodes
-                            active_bytes[byte_count++] = i;
-                        }
-                    }
-                    
-                    if (byte_count > 0 && g_graph.node_count < 500) {
-                        // GRAPH CREATES OUTPUT SEQUENCE - PURE GRAPH CODING!
-                        // Create output for each active byte (transformed)
-                        for (uint32_t i = 0; i < byte_count; i++) {
-                            uint32_t output_node = node_create(&g_graph);
-                            if (output_node != UINT32_MAX) {
-                                node_set_op_type(&g_graph.nodes[output_node], OP_MEMORY);
-                                node_set_output(&g_graph.nodes[output_node], 1);
-                                
-                                // Transform input byte to output byte
-                                uint8_t input_byte = (uint8_t)(g_graph.nodes[active_bytes[i]].data);
-                                uint8_t output_byte = input_byte;
-                                
-                                // Graph applies transformations (case flip, punctuation)
-                                if (output_byte >= 'a' && output_byte <= 'z') {
-                                    output_byte -= 32; // Uppercase
-                                } else if (output_byte >= 'A' && output_byte <= 'Z') {
-                                    output_byte += 32; // Lowercase
-                                } else if (output_byte == '\n' || output_byte == ' ') {
-                                    output_byte = '!'; // Exclamation
-                                }
-                                
-                                node_memory_value(&g_graph.nodes[output_node]) = (float)output_byte;
-                                node_theta(&g_graph.nodes[output_node]) = 999.0f;
-                                
-                                // Wire: input_byte → output (graph creates circuit!)
-                                uint32_t e_idx = edge_create(&g_graph, active_bytes[i], output_node);
-                                if (e_idx != UINT32_MAX) {
-                                    g_graph.edges[e_idx].w_fast = 180;
-                                    g_graph.edges[e_idx].w_slow = 150;
-                                }
-                                
-                                printf("[GRAPH→OUTPUT] OP_SPLICE[%u] created OUTPUT[%u]: '%c'→'%c' (0x%02X→0x%02X)\n",
-                                       (uint32_t)(n - g_graph.nodes), output_node,
-                                       (input_byte >= 32 && input_byte < 127) ? input_byte : '?',
-                                       (output_byte >= 32 && output_byte < 127) ? output_byte : '?',
-                                       input_byte, output_byte);
-                                result = 1.0f;
-                            }
-                        }
-                    }
-                }
+                // BEHAVIOR 2: Output Node Creation (DISABLED - too noisy)
+                // Let seed_patterns() create structured outputs instead
             }
             break;
             
@@ -813,62 +757,7 @@ static inline float execute_node_operation(Node *n) {
                 // HIGH THETA (>0.5): Create OUTPUT nodes (response generation)
                 // LOW THETA (<0.5): Create computation nodes (circuit building)
                 
-                if (node_theta(n) > 0.5f) {
-                    // OUTPUT GENERATION MODE - GRAPH CREATES RESPONSES!
-                    uint32_t active_inputs[5];
-                    uint32_t input_count = 0;
-                    
-                    // Find active byte nodes (theta == data is the signature)
-                    for (uint32_t i = 0; i < g_graph.node_count && input_count < 5; i++) {
-                        Node *candidate = &g_graph.nodes[i];
-                        // Byte nodes: data in [1,255] and theta == data
-                        if (candidate->a > 0.7f && 
-                            candidate->data >= 1.0f && candidate->data <= 255.0f &&
-                            node_theta(candidate) == candidate->data) {
-                            active_inputs[input_count++] = i;
-                        }
-                    }
-                    
-                    if (input_count > 0 && g_graph.node_count < 600) {
-                        // Create output sequence (up to 3 bytes)
-                        uint32_t prev_output = UINT32_MAX;
-                        for (uint32_t i = 0; i < input_count && i < 3; i++) {
-                            uint32_t output_node = node_create(&g_graph);
-                            if (output_node != UINT32_MAX) {
-                                node_set_op_type(&g_graph.nodes[output_node], OP_MEMORY);
-                                node_set_output(&g_graph.nodes[output_node], 1);
-                                
-                                // Transform input to output
-                                uint8_t input_byte = (uint8_t)(g_graph.nodes[active_inputs[i]].data);
-                                uint8_t output_byte = input_byte;
-                                
-                                // Graph applies transformations
-                                if (output_byte >= 'a' && output_byte <= 'z') output_byte -= 32; // Uppercase
-                                else if (output_byte >= 'A' && output_byte <= 'Z') output_byte += 32; // Lowercase
-                                else if (i == input_count - 1) output_byte = '\n'; // Newline at end
-                                
-                                node_memory_value(&g_graph.nodes[output_node]) = (float)output_byte;
-                                node_theta(&g_graph.nodes[output_node]) = 999.0f; // Immutable
-                                
-                                // Wire: input → output
-                                edge_create(&g_graph, active_inputs[i], output_node);
-                                
-                                // Wire: prev_output → this_output (sequence)
-                                if (prev_output != UINT32_MAX) {
-                                    edge_create(&g_graph, prev_output, output_node);
-                                }
-                                prev_output = output_node;
-                                
-                                printf("[GRAPH→OUTPUT] OP_FORK Node[%u] created OUTPUT[%u/%u]: '%c'(0x%02X)\n",
-                                       (uint32_t)(n - g_graph.nodes), i+1, input_count,
-                                       (output_byte >= 32 && output_byte < 127) ? output_byte : '?',
-                                       output_byte);
-                            }
-                        }
-                        result = 1.0f;
-                    }
-                    
-                } else {
+                {
                     // CIRCUIT BUILDING MODE - Create computation nodes
                     uint32_t node_a = rand() % g_graph.node_count;
                     uint32_t node_b = rand() % g_graph.node_count;
@@ -2476,21 +2365,35 @@ void propagate() {
         g_sys.activation_delta /= (float)g_graph.node_count;
     }
     
-    // SAFEGUARD: Energy normalization to prevent thermal runaway
+    // SAFEGUARD 1: Energy normalization to prevent thermal runaway
     float total_activation = 0.0f;
     for (uint32_t i = 0; i < g_graph.node_count; i++) {
         total_activation += g_graph.nodes[i].a;
     }
     
     // If total energy exceeds cap, normalize all activations
-    float energy_cap = (float)g_graph.node_count * 0.5f; // Average activation of 0.5
+    float energy_cap = (float)g_graph.node_count * 0.3f; // Average activation of 0.3 (was 0.5 - tighter!)
     if (total_activation > energy_cap) {
         float scale = energy_cap / total_activation;
         for (uint32_t i = 0; i < g_graph.node_count; i++) {
             g_graph.nodes[i].a *= scale;
             node_hat(&g_graph.nodes[i]) *= scale;
         }
-        // printf("[ENERGY CAP] Normalized: %.1f -> %.1f\n", total_activation, energy_cap);
+    }
+    
+    // SAFEGUARD 2: Activation decay - prevent nodes staying active forever
+    for (uint32_t i = 0; i < g_graph.node_count; i++) {
+        Node *n = &g_graph.nodes[i];
+        // Non-output, non-protected nodes decay slowly
+        if (!node_is_output(n) && !node_is_protected(n) && n->a > 0.01f) {
+            n->a *= 0.99f; // 1% decay per tick
+        }
+    }
+    
+    // SAFEGUARD 3: Hard clamp - no activation above 1.0
+    for (uint32_t i = 0; i < g_graph.node_count; i++) {
+        if (g_graph.nodes[i].a > 1.0f) g_graph.nodes[i].a = 1.0f;
+        if (g_graph.nodes[i].a < 0.0f) g_graph.nodes[i].a = 0.0f;
     }
     
     // NOTE: Temp arrays stay allocated (allocated once at startup, not per-cycle)
@@ -3794,48 +3697,47 @@ void merge_output_into_input() {
 }
 
 void emit_action() {
-    // Check for activated output nodes first (pattern-driven responses)
+    // IMPROVED OUTPUT CONTROL: Only emit when strongly activated
+    static uint32_t last_output_tick = 0;
+    static uint8_t last_output_buffer[256];
+    static uint32_t last_output_len = 0;
+    
+    // Rate limiting: Don't output every single tick (too spammy)
+    if (g_sys.tick - last_output_tick < 10) return; // Wait 10 ticks between outputs
+    
     uint8_t output_buffer[256];
     uint32_t output_len = 0;
     
-    static int output_debug = 0;
-    int found_active = 0;
-    
+    // Collect activated output nodes (threshold 0.5 - balanced)
     for (uint32_t i = 0; i < g_graph.node_count && output_len < 256; i++) {
         Node *n = &g_graph.nodes[i];
-        if (node_is_output(n)) {
-            if (n->a > 0.3f) {
-                found_active = 1;
-                uint8_t byte = (uint8_t)node_memory_value(n);
-                output_buffer[output_len++] = byte;
-                
-                // Debug first few outputs
-                if (output_debug < 5) {
-                    fprintf(stderr, "[OUTPUT-NODE] Node[%u] fired! a=%.2f, byte='%c'(0x%02X)\n",
-                           i, n->a, (byte >= 32 && byte < 127) ? byte : '.', byte);
-                    output_debug++;
-                }
-            }
+        if (node_is_output(n) && n->a > 0.5f) {  // Balanced threshold
+            uint8_t byte = (uint8_t)node_memory_value(n);
+            output_buffer[output_len++] = byte;
         }
     }
     
-    // If output nodes fired, use their output
+    // Only output if we have bytes AND it's different from last output
     if (output_len > 0) {
-        fprintf(stderr, "[EMIT] Outputting %u bytes from activated output nodes\n", output_len);
-        write(STDOUT_FILENO, output_buffer, output_len);
-        write(STDOUT_FILENO, "\n", 1);  // Add newline
-        fflush(stdout);
+        // Check if same as last output (avoid repeating)
+        int is_duplicate = (output_len == last_output_len && 
+                           memcmp(output_buffer, last_output_buffer, output_len) == 0);
         
-        // Mirror to TX ring
-        ring_write(&g_sys.tx_ring, output_buffer, output_len);
-        
-        // Save as last output  
-        memcpy(g_sys.last_output_frame, output_buffer, output_len);
-        g_sys.last_output_frame_len = output_len;
+        if (!is_duplicate) {
+            write(STDOUT_FILENO, output_buffer, output_len);
+            write(STDOUT_FILENO, "\n", 1);
+            
+            // Save for deduplication
+            memcpy(last_output_buffer, output_buffer, output_len);
+            last_output_len = output_len;
+            last_output_tick = g_sys.tick;
+            
+            // Mirror to TX ring and save
+            ring_write(&g_sys.tx_ring, output_buffer, output_len);
+            memcpy(g_sys.last_output_frame, output_buffer, output_len);
+            g_sys.last_output_frame_len = output_len;
+        }
         return;
-    } else if (found_active && output_debug < 2) {
-        fprintf(stderr, "[EMIT] Output nodes active but none fired (a > 0.3)\n");
-        output_debug++;
     }
     
     // Fall back to macro-based output if no output nodes fired
