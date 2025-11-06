@@ -336,134 +336,57 @@ typedef struct {
     uint32_t count;
 } RingBuffer;
 
+// ULTRA-MINIMAL System - Only C runtime essentials!
+// ALL PARAMETERS ARE GRAPH NODES (epsilon, eta, energy, etc.)
 typedef struct {
+    // I/O (must be in C - can't be graph nodes)
     Detector *detectors;
-    uint32_t  detector_count;
-    uint32_t  detector_cap;
+    uint32_t detector_count, detector_cap, detector_map[256];
+    Macro *macros;
+    uint32_t macro_count, macro_cap;
+    RingBuffer rx_ring, tx_ring;
+    uint8_t *current_frame, *last_output_frame;
+    uint32_t current_frame_cap, last_output_frame_cap;
+    uint16_t current_frame_len, last_output_frame_len;
     
-    // P2 SAFEGUARD: Detector deduplication map (one detector per pattern)
-    uint32_t detector_map[256]; // Maps byte -> detector_id (0 = none)
-    
-    Macro    *macros;
-    uint32_t  macro_count;
-    uint32_t  macro_cap;
-    
-    RingBuffer rx_ring;
-    RingBuffer tx_ring;
-    
-    uint8_t  *current_frame;        // Dynamic frame buffer
-    uint32_t current_frame_cap;     // Current capacity
-    uint16_t current_frame_len;     // Actual length
-    
-    uint8_t  *last_output_frame;    // Dynamic frame buffer
-    uint32_t last_output_frame_cap; // Current capacity
-    uint16_t last_output_frame_len;
-    
-    float    epsilon;          // exploration rate (dynamically modulated)
-    float    energy;           // global energy field (drives exploration & plasticity)
+    // Tick counter
     uint64_t tick;
+    uint32_t tick_ms, snapshot_period;
     
-    // Statistics
-    uint32_t edges_created;
-    uint32_t edges_pruned;
-    uint32_t nodes_created;
-    uint32_t nodes_pruned;
-    uint32_t layers_created;
-    
-    float    mean_error;       // prediction error (drives energy)
-    float    mean_surprise;    // continuous surprise measure
+    // Computed statistics (calculated each tick, not parameters)
+    float mean_error, mean_surprise;
     uint32_t active_node_count;
+    float current_density, current_activity, prediction_acc;
+    uint32_t thought_depth;
+    float prev_mean_error, activation_delta;
+    float mean_temporal_distance, mean_spatial_distance;
+    uint32_t thoughts_settled, thoughts_maxed;
     
-    // Global baseline for predictive lift
-    float    *P1;  // per node
-    float    *P0;  // per node
+    // Counters (statistics, not parameters)
+    uint64_t total_cycles, meta_operations;
+    uint32_t edges_created, edges_pruned, nodes_created, nodes_pruned;
+    uint32_t mutations_attempted, mutations_kept;
+    uint32_t modules_created, modules_pruned, patterns_detected, module_calls;
+    uint32_t max_hierarchy_level, op_type_counts[NUM_OPS];
+    float modularity_score, global_mutation_rate, op_type_utility[NUM_OPS];
     
-    // Runtime configurable parameters (all can change during operation)
-    // Basic timing and persistence
-    uint32_t tick_ms;           // milliseconds per tick
-    uint32_t snapshot_period;   // ticks between snapshots
+    // Baseline (for learning algorithm)
+    float *P1, *P0;
     
-    // Continuous dynamics parameters
-    float    lambda_decay;      // count decay
-    float    lambda_e;          // eligibility trace
-    float    beta_blend;        // predictive vs error
-    float    gamma_slow;        // slow weight fraction
-    float    eta_fast;          // fast weight step
-    float    delta_max;         // max weight change per tick
-    float    alpha_fast_decay;  // fast weight decay rate
-    float    alpha_slow_decay;  // slow weight decay rate
+    // LEGACY: TODO - Convert ALL these to graph nodes!
+    // (For now, mirrored from graph for compatibility with old code)
+    float epsilon, energy, eta_fast, lambda_e, lambda_decay, beta_blend, gamma_slow;
+    float delta_max, alpha_fast_decay, alpha_slow_decay, sigmoid_k, activation_scale;
+    float energy_alpha, energy_decay, epsilon_min, epsilon_max, temporal_decay, spatial_k;
+    float adapt_rate, target_density, target_activity, target_prediction_acc;
+    float prune_weight_ref, stale_ref, node_stale_ref, co_freq_ref, density_ref;
+    float prune_rate, create_rate, layer_rate, target_settle_ratio, max_hop_growth_rate;
+    uint32_t max_thought_hops, target_thought_depth, min_thought_hops;
+    uint16_t layer_min_size;
+    float stability_eps, activation_eps;
     
-    // Meta-parameters for homeostatic adaptation
-    float    adapt_rate;        // rate of parameter adaptation
-    float    target_density;    // target ratio of edges to max possible
-    float    target_activity;   // target fraction of active nodes
-    float    target_prediction_acc; // target prediction accuracy (1 - error)
-    
-    // Target metrics for thought/time/space adaptation
-    uint16_t target_thought_depth; // ideal number of hops (not too shallow/deep)
-    float    target_settle_ratio;  // target ratio of settled thoughts (70%)
-    uint16_t min_thought_hops;     // minimum depth for meaningful thought
-    float    max_hop_growth_rate;  // controls how fast max_hops can grow (soft limit)
-    
-    // Soft reference values (replace hard thresholds)
-    float    prune_weight_ref;  // reference weight for pruning
-    float    stale_ref;         // reference staleness for edges
-    float    node_stale_ref;    // reference staleness for nodes
-    float    co_freq_ref;       // reference co-activation frequency
-    float    density_ref;       // reference density
-    uint16_t layer_min_size;    // minimum layer size
-    
-    // Adaptive parameters (self-tuning based on graph dynamics)
-    float    sigmoid_k;        // sigmoid steepness
-    float    prune_rate;       // pruning probability base
-    float    create_rate;      // node creation probability base
-    float    layer_rate;       // layer emergence probability base
-    float    energy_alpha;     // energy learning rate
-    float    energy_decay;     // energy decay rate
-    float    epsilon_min;      // min exploration
-    float    epsilon_max;      // max exploration
-    float    activation_scale; // activation sensitivity
-    
-    // Adaptive emergent time/space/thought parameters
-    uint32_t max_thought_hops; // adaptive max propagation passes (now unlimited)
-    float    stability_eps;    // adaptive convergence threshold (error)
-    float    activation_eps;   // adaptive convergence threshold (activation)
-    float    temporal_decay;   // adaptive temporal distance scaling
-    float    spatial_k;        // adaptive spatial connectivity scaling
-    
-    // Homeostatic targets & measurements
-    float    current_density;  // current edge density
-    float    current_activity; // current node activity rate
-    float    prediction_acc;   // current prediction accuracy
-    
-    // Emergent time, space, and thought tracking
-    uint32_t thought_depth;    // number of propagation hops in current tick
-    float    prev_mean_error;  // for convergence detection
-    float    activation_delta; // total activation change in last hop
-    float    mean_temporal_distance;  // average edge staleness
-    float    mean_spatial_distance;   // average connectivity-based distance
-    uint32_t thoughts_settled; // count of converged thoughts
-    uint32_t thoughts_maxed;   // count of max-hop thoughts (didn't converge)
-    
-    // Self-optimization tracking
-    uint64_t total_cycles;        // Total computation cycles
-    uint64_t meta_operations;     // Count of graph modifications
-    uint32_t op_type_counts[NUM_OPS]; // Distribution of node operations
-    float    op_type_utility[NUM_OPS]; // Avg utility per operation type
-    uint32_t mutations_attempted; // Evolutionary changes tried
-    uint32_t mutations_kept;      // Beneficial mutations
-    float    global_mutation_rate; // System-wide mutation probability
-    
-    // Hierarchical modularity tracking
-    uint32_t modules_created;     // Total modules discovered
-    uint32_t modules_pruned;      // Modules removed for inefficiency
-    uint32_t patterns_detected;   // Frequent subgraphs found
-    uint32_t max_hierarchy_level; // Deepest nesting level
-    float    modularity_score;    // How modular the system is (0-1)
-    uint32_t module_calls;        // How many times modules were invoked
-    
-    // SAFEGUARDS: Pending operations queue (causal scheduling)
-    uint32_t pending_meta_ops[1000][3]; // [op_type, target_a, target_b]
+    // Meta-op queue (causal scheduling)
+    uint32_t pending_meta_ops[1000][3];
     uint32_t pending_count;
 } System;
 
@@ -755,17 +678,17 @@ static inline float execute_node_operation(Node *n) {
             op_cost = 80;
             if (node_soma(n) > node_theta(n) && randf() < 0.05f) {
                 // Spawn computation nodes between highly active pairs
-                uint32_t node_a = rand() % g_graph.node_count;
-                uint32_t node_b = rand() % g_graph.node_count;
-                
+                    uint32_t node_a = rand() % g_graph.node_count;
+                    uint32_t node_b = rand() % g_graph.node_count;
+                    
                 if (node_a != node_b && g_graph.nodes[node_a].a > 0.6f && g_graph.nodes[node_b].a > 0.6f) {
-                    uint32_t new_idx = node_create(&g_graph);
-                    if (new_idx != UINT32_MAX) {
-                        uint8_t new_op = (uint8_t)(node_soma(n) * NUM_OPS) % NUM_OPS;
-                        node_set_op_type(&g_graph.nodes[new_idx], new_op);
-                        edge_create(&g_graph, node_a, new_idx);
-                        edge_create(&g_graph, new_idx, node_b);
-                        result = 1.0f;
+                        uint32_t new_idx = node_create(&g_graph);
+                        if (new_idx != UINT32_MAX) {
+                            uint8_t new_op = (uint8_t)(node_soma(n) * NUM_OPS) % NUM_OPS;
+                            node_set_op_type(&g_graph.nodes[new_idx], new_op);
+                            edge_create(&g_graph, node_a, new_idx);
+                            edge_create(&g_graph, new_idx, node_b);
+                            result = 1.0f;
                     }
                 }
             }
