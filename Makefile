@@ -2,7 +2,7 @@
 
 CC = gcc
 CFLAGS = -O2 -Wall -Wextra -std=c99
-LDFLAGS = -lm
+LDFLAGS = -lm -pthread
 
 TARGET = melvin_core
 SRC = melvin_core.c
