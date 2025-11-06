@@ -498,13 +498,11 @@ typedef struct ActivationPattern ActivationPattern;
 typedef enum CircuitTemplate CircuitTemplate;
 
 // Self-programming systems
-void hebbian_circuit_former();
 void pattern_compiler_init();
 void detect_activation_pattern();
 void compile_pattern_to_circuit(ActivationPattern *pat);
 uint32_t instantiate_template(CircuitTemplate type, uint32_t *inputs, uint32_t input_count);
 void fitness_based_circuit_selection();
-void meta_interpreter_execute();
 
 /* ========================================================================
  * CONTINUOUS DYNAMICS HELPERS
@@ -1523,18 +1521,6 @@ void collapse_to_module(Graph *g, uint32_t *nodes, uint32_t count) {
            count, proxy_idx, module_id + 1);
 }
 
-/* ========================================================================
- * HEBBIAN CIRCUIT FORMATION - "Neurons that fire together, wire together"
- * ======================================================================== */
-
-// GRAPH-BASED HEBBIAN LEARNING
-// This is now a STUB - the actual work is done by OP_SPLICE nodes in the graph!
-// The graph wires itself via the 20 OP_SPLICE nodes created in bootstrap_meta_circuits()
-void hebbian_circuit_former() {
-    // NO-OP: Hebbian learning now happens IN THE GRAPH via OP_SPLICE nodes
-    // They activate during propagate() when nodes co-fire and create edges automatically
-    // This C function exists only for API compatibility
-}
 
 /* ========================================================================
  * PATTERN → CIRCUIT COMPILER
@@ -1847,14 +1833,6 @@ Edge* edge_hash_find(Graph *g, uint32_t src, uint32_t dst) {
 /* ========================================================================
  * GRAPH MANAGEMENT
  * ======================================================================== */
-
-void graph_init(Graph *g, uint32_t node_cap, uint32_t edge_cap) {
-    // Graph data now lives in mmap, initialized by graph_mmap_init()
-    // This function is now a no-op, kept for API compatibility
-    (void)g;
-    (void)node_cap;
-    (void)edge_cap;
-}
 
 void graph_free(Graph *g) {
     // Nodes, edges, modules are now in mmap, don't free
@@ -2724,34 +2702,6 @@ void adapt_parameters() {
 }
 
 /* ========================================================================
- * PRUNING (Continuous, probabilistic synaptic decay)
- * ======================================================================== */
-
-// GRAPH-BASED PRUNING
-// This is now a STUB - the actual work is done by META_DELETE_EDGE nodes in the graph!
-void prune() {
-    // NO-OP: Pruning now happens IN THE GRAPH via META_DELETE_EDGE nodes
-    // The 10 pruner nodes created in bootstrap_meta_circuits() handle this
-    // They activate during execute_meta_operation() and queue edge deletions
-}
-
-/* ========================================================================
- * NODE CREATION (Probabilistic emergence from co-activation)
- * ======================================================================== */
-
-// GRAPH-BASED NODE CREATION
-// This is now a STUB - the actual work is done by OP_FORK nodes in the graph!
-void try_create_nodes() {
-    // NO-OP: Node creation now happens IN THE GRAPH via OP_FORK nodes
-    // They activate during propagate() and spawn new nodes automatically
-    // The 5 OP_FORK nodes created in bootstrap_meta_circuits() handle this
-}
-
-/* ========================================================================
- * META-NODE CREATION (Self-optimization agents)
- * ======================================================================== */
-
-/* ========================================================================
  * FITNESS-BASED CIRCUIT SELECTION
  * ======================================================================== */
 
@@ -2777,38 +2727,6 @@ void fitness_based_circuit_selection() {
     }
 }
 
-/* ========================================================================
- * META-INTERPRETER - Nodes That Create/Modify Other Nodes
- * ======================================================================== */
-
-// GRAPH-BASED META-INTERPRETATION
-// This is now a STUB - OP_SPLICE and OP_EVAL nodes do the work!
-void meta_interpreter_execute() {
-    // NO-OP: Meta-interpretation happens IN THE GRAPH
-    // OP_SPLICE nodes create circuits when active
-    // OP_EVAL nodes with high utility clone themselves
-    // All happens during execute_node_operation() - no C function needed
-}
-
-// GRAPH-BASED META-NODE CREATION
-// This is now a STUB - meta-nodes are created in bootstrap!
-void try_create_meta_nodes() {
-    // NO-OP: All meta-nodes created in bootstrap_meta_circuits()
-    // Graph can spawn more via OP_FORK if needed
-    // This C function exists only for API compatibility
-}
-
-/* ========================================================================
- * LAYER EMERGENCE (Probabilistic meta-node creation from dense clusters)
- * ======================================================================== */
-
-// GRAPH-BASED LAYER EMERGENCE
-// This is now a STUB - layers emerge from graph circuits!
-void try_layer_emergence() {
-    // NO-OP: Layer emergence happens via graph circuits
-    // Meta-nodes are pre-installed in bootstrap_meta_circuits()
-    // Graph can create more via OP_FORK and META_CREATE_SHORTCUT
-}
 
 /* ========================================================================
  * PERSISTENCE (Memory-Mapped Single File)
@@ -4020,11 +3938,8 @@ void main_loop() {
             fitness_based_circuit_selection(); // Just updates scores
         }
         
-        // NOTE: These are now NO-OPs - graph handles everything:
-        hebbian_circuit_former();      // → OP_SPLICE nodes in graph
-        meta_interpreter_execute();    // → OP_EVAL nodes in graph  
-        try_create_nodes();            // → OP_FORK nodes in graph
-        continuous_autonomous_thinking(); // → Thinker self-loop in graph
+        // Graph handles structure growth via OP_SPLICE and OP_FORK nodes
+        continuous_autonomous_thinking();
         
         // (4) OUTPUT — "do it"
         emit_action();
@@ -4184,466 +4099,32 @@ uint8_t byte_node_exists[256];
 // Bootstrap meta-circuits that enable the graph to code itself
 // GOAL: Entire self-programming system lives IN THE GRAPH, not in C!
 void bootstrap_meta_circuits() {
-    printf("\n[META-BOOTSTRAP] Installing self-programming meta-circuits...\n");
-    printf("[META-BOOTSTRAP] Moving ALL logic into graph topology...\n\n");
+    // Thinker - keeps graph alive
+    uint32_t t = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[t], OP_GATE);
+    g_graph.nodes[t].a = 0.4f;
+    edge_create(&g_graph, t, t);
+    node_set_protected(&g_graph.nodes[t], 1);
     
-    // ═══════════════════════════════════════════════════════════════
-    // HEBBIAN LEARNING CIRCUIT (Replaces hebbian_circuit_former C function!)
-    // ═══════════════════════════════════════════════════════════════
-    
-    // Create 20 OP_SPLICE nodes that sample random node pairs
-    // ═══════════════════════════════════════════════════════════════
-    // CONTINUOUS THINKING CIRCUIT (Create first so others can reference it!)
-    // ═══════════════════════════════════════════════════════════════
-    
-    printf("[GRAPH-CODE] Installing continuous thought circuit...\n");
-    uint32_t thinker = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[thinker], OP_GATE);
-    g_graph.nodes[thinker].a = 0.4f; // Start with energy
-    edge_create(&g_graph, thinker, thinker); // Self-loop = continuous
-    node_set_protected(&g_graph.nodes[thinker], 1);
-    
-    printf("[GRAPH-CODE] Installing Hebbian learning circuit (20 samplers)...\n");
-    uint32_t hebbian_nodes[20];
-    for (int i = 0; i < 20; i++) {
-        hebbian_nodes[i] = node_create(&g_graph);
-        node_set_op_type(&g_graph.nodes[hebbian_nodes[i]], OP_SPLICE);
-        node_theta(&g_graph.nodes[hebbian_nodes[i]]) = 0.5f; // Lower threshold - more active!
-        g_graph.nodes[hebbian_nodes[i]].a = 0.2f; // Start with some energy
-        node_set_protected(&g_graph.nodes[hebbian_nodes[i]], 1);
-        
-        // Wire to thinker to keep them energized
-        edge_create(&g_graph, thinker, hebbian_nodes[i]);
-    }
-    
-    // ═══════════════════════════════════════════════════════════════
-    // PATTERN FREQUENCY TRACKING (Replaces detect_activation_pattern!)
-    // ═══════════════════════════════════════════════════════════════
-    
-    printf("[GRAPH-CODE] Installing pattern frequency tracker...\n");
-    uint32_t freq_counter = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[freq_counter], OP_SEQUENCE);
-    node_set_protected(&g_graph.nodes[freq_counter], 1);
-    edge_create(&g_graph, thinker, freq_counter); // Keep active
-    
-    // Pattern compiler trigger - activates when freq_counter high
-    uint32_t pattern_compiler = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[pattern_compiler], OP_EVAL);
-    node_theta(&g_graph.nodes[pattern_compiler]) = 0.8f;
-    node_set_protected(&g_graph.nodes[pattern_compiler], 1);
-    edge_create(&g_graph, freq_counter, pattern_compiler);
-    
-    // ═══════════════════════════════════════════════════════════════
-    // PARAMETER ADAPTATION CIRCUIT (Create sensors FIRST!)
-    // ═══════════════════════════════════════════════════════════════
-    
-    printf("[GRAPH-CODE] Installing homeostatic parameter circuit...\n");
-    // Create sensor nodes that measure graph statistics
-    uint32_t density_sensor = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[density_sensor], OP_COMPARE);
-    node_theta(&g_graph.nodes[density_sensor]) = 0.0f; // ID marker for density sensor
-    g_graph.nodes[density_sensor].a = 0.1f;
-    node_set_protected(&g_graph.nodes[density_sensor], 1);
-    
-    uint32_t activity_sensor = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[activity_sensor], OP_COMPARE);
-    node_theta(&g_graph.nodes[activity_sensor]) = 1.0f; // ID marker for activity sensor
-    g_graph.nodes[activity_sensor].a = 0.1f;
-    node_set_protected(&g_graph.nodes[activity_sensor], 1);
-    
-    uint32_t error_sensor = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[error_sensor], OP_COMPARE);
-    node_theta(&g_graph.nodes[error_sensor]) = 2.0f; // ID marker for error sensor
-    g_graph.nodes[error_sensor].a = 0.1f;
-    node_set_protected(&g_graph.nodes[error_sensor], 1);
-    
-    // Wire sensors to thinker to keep them active
-    edge_create(&g_graph, thinker, density_sensor);
-    edge_create(&g_graph, thinker, activity_sensor);
-    edge_create(&g_graph, thinker, error_sensor);
-    
-    // ═══════════════════════════════════════════════════════════════
-    // PRUNING CIRCUIT (Replaces prune() C function!)
-    // ═══════════════════════════════════════════════════════════════
-    
-    printf("[GRAPH-CODE] Installing edge pruning circuit...\n");
-    // Create 10 META_DELETE_EDGE nodes that probabilistically remove weak edges
-    uint32_t pruner_nodes[10];
-    for (int i = 0; i < 10; i++) {
-        pruner_nodes[i] = node_create(&g_graph);
-        node_set_meta(&g_graph.nodes[pruner_nodes[i]], 1);
-        node_set_meta_op(&g_graph.nodes[pruner_nodes[i]], META_DELETE_EDGE);
-        node_set_op_type(&g_graph.nodes[pruner_nodes[i]], OP_THRESHOLD);
-        node_theta(&g_graph.nodes[pruner_nodes[i]]) = 0.3f; // LOWER THRESHOLD!
-        g_graph.nodes[pruner_nodes[i]].a = 0.15f; // Higher baseline
-        node_set_protected(&g_graph.nodes[pruner_nodes[i]], 1);
-        
-        // CRITICAL FIX: Wire to thinker to keep energized!
-        edge_create(&g_graph, thinker, pruner_nodes[i]);
-        
-        // Wire to density sensor - high density triggers pruning
-        edge_create(&g_graph, density_sensor, pruner_nodes[i]);
-    }
-    
-    // ═══════════════════════════════════════════════════════════════
-    // NODE CREATION CIRCUIT (Replaces try_create_nodes!)
-    // ═══════════════════════════════════════════════════════════════
-    
-    printf("[GRAPH-CODE] Installing node creation circuit...\n");
-    // Create 5 OP_FORK nodes that spawn new nodes from patterns
-    uint32_t spawner_nodes[5];
+    // 5 Hebbian samplers - create edges between co-active nodes
     for (int i = 0; i < 5; i++) {
-        spawner_nodes[i] = node_create(&g_graph);
-        node_set_op_type(&g_graph.nodes[spawner_nodes[i]], OP_FORK);
-        node_theta(&g_graph.nodes[spawner_nodes[i]]) = 0.4f; // Lower threshold!
-        g_graph.nodes[spawner_nodes[i]].a = 0.15f; // Start with energy
-        node_set_protected(&g_graph.nodes[spawner_nodes[i]], 1);
-        
-        // Wire to thinker so they stay active
-        edge_create(&g_graph, thinker, spawner_nodes[i]);
+        uint32_t s = node_create(&g_graph);
+        node_set_op_type(&g_graph.nodes[s], OP_SPLICE);
+        node_theta(&g_graph.nodes[s]) = 0.4f;
+        g_graph.nodes[s].a = 0.2f;
+        node_set_protected(&g_graph.nodes[s], 1);
+        edge_create(&g_graph, t, s);
     }
     
-    // Create parameter control nodes (future: will directly control system parameters)
-    uint32_t prune_rate_controller = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[prune_rate_controller], OP_SUM);
-    node_set_protected(&g_graph.nodes[prune_rate_controller], 1);
-    edge_create(&g_graph, density_sensor, prune_rate_controller);
-    edge_create(&g_graph, thinker, prune_rate_controller);
-    
-    uint32_t create_rate_controller = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[create_rate_controller], OP_SUM);
-    node_set_protected(&g_graph.nodes[create_rate_controller], 1);
-    edge_create(&g_graph, activity_sensor, create_rate_controller);
-    edge_create(&g_graph, thinker, create_rate_controller);
-    
-    uint32_t learning_rate_controller = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[learning_rate_controller], OP_SUM);
-    node_set_protected(&g_graph.nodes[learning_rate_controller], 1);
-    edge_create(&g_graph, error_sensor, learning_rate_controller);
-    edge_create(&g_graph, thinker, learning_rate_controller);
-    
-    // ═══════════════════════════════════════════════════════════════
-    // HIERARCHICAL ABSTRACTION LAYERS - KEY TO HIGHER LEARNING!
-    // ═══════════════════════════════════════════════════════════════
-    
-    printf("[GRAPH-CODE] Installing 3-layer hierarchical learning system...\n");
-    
-    // LAYER 1: Word-level (Bytes → Words)
-    printf("[LAYER-1] Word abstraction (bytes → word nodes)...\n");
-    uint32_t space_detector = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[space_detector], OP_THRESHOLD);
-    node_theta(&g_graph.nodes[space_detector]) = 32.0f; // ASCII space
-    g_graph.nodes[space_detector].data = 1.0f; // Layer-1 marker
-    node_set_protected(&g_graph.nodes[space_detector], 1);
-    
-    uint32_t word_accumulator = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[word_accumulator], OP_SEQUENCE);
-    node_theta(&g_graph.nodes[word_accumulator]) = 0.5f;
-    g_graph.nodes[word_accumulator].data = 1.0f; // Layer-1 marker
-    node_set_protected(&g_graph.nodes[word_accumulator], 1);
-    edge_create(&g_graph, space_detector, word_accumulator);
-    
-    // Word creators - spawn word nodes from byte sequences
-    uint32_t word_creator[3];
-    for (int i = 0; i < 3; i++) {
-        word_creator[i] = node_create(&g_graph);
-        node_set_op_type(&g_graph.nodes[word_creator[i]], OP_FORK);
-        node_theta(&g_graph.nodes[word_creator[i]]) = 0.6f + i * 0.05f;
-        g_graph.nodes[word_creator[i]].data = 1.0f; // Layer-1 marker
-        node_set_protected(&g_graph.nodes[word_creator[i]], 1);
-        edge_create(&g_graph, word_accumulator, word_creator[i]);
-    }
-    
-    // LAYER 2: Phrase-level (Words → Phrases)
-    printf("[LAYER-2] Phrase abstraction (words → phrase nodes)...\n");
-    uint32_t phrase_detector[2];
-    for (int i = 0; i < 2; i++) {
-        phrase_detector[i] = node_create(&g_graph);
-        node_set_op_type(&g_graph.nodes[phrase_detector[i]], OP_SEQUENCE);
-        node_theta(&g_graph.nodes[phrase_detector[i]]) = 0.6f;
-        g_graph.nodes[phrase_detector[i]].data = 2.0f; // Layer-2 marker
-        node_set_protected(&g_graph.nodes[phrase_detector[i]], 1);
-        for (int j = 0; j < 3; j++) {
-            edge_create(&g_graph, word_creator[j], phrase_detector[i]);
-        }
-    }
-    
-    uint32_t phrase_creator = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[phrase_creator], OP_FORK);
-    node_theta(&g_graph.nodes[phrase_creator]) = 0.7f;
-    g_graph.nodes[phrase_creator].data = 2.0f; // Layer-2 marker
-    node_set_protected(&g_graph.nodes[phrase_creator], 1);
-    for (int i = 0; i < 2; i++) {
-        edge_create(&g_graph, phrase_detector[i], phrase_creator);
-    }
-    
-    // LAYER 3: Concept-level (Phrases → Concepts)
-    printf("[LAYER-3] Concept abstraction (phrases → concept nodes)...\n");
-    uint32_t concept_detector = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[concept_detector], OP_COMPARE);
-    node_theta(&g_graph.nodes[concept_detector]) = 0.7f;
-    g_graph.nodes[concept_detector].data = 3.0f; // Layer-3 marker
-    node_set_protected(&g_graph.nodes[concept_detector], 1);
-    edge_create(&g_graph, phrase_creator, concept_detector);
-    
-    uint32_t concept_creator = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[concept_creator], OP_EVAL);
-    node_theta(&g_graph.nodes[concept_creator]) = 0.8f;
-    g_graph.nodes[concept_creator].data = 3.0f; // Layer-3 marker
-    node_set_protected(&g_graph.nodes[concept_creator], 1);
-    edge_create(&g_graph, concept_detector, concept_creator);
-    
-    printf("[HIERARCHY] 3-layer learning system installed:\n");
-    printf("  • Layer 1: Bytes → Words (5 nodes)\n");
-    printf("  • Layer 2: Words → Phrases (3 nodes)\n");
-    printf("  • Layer 3: Phrases → Concepts (2 nodes)\n");
-    printf("  • Total: 10 hierarchical abstraction nodes\n");
-    
-    // ═══════════════════════════════════════════════════════════════
-    // ADAPTIVE HOT/COLD CONFIGURATION - GRAPH CONTROLS MEMORY!
-    // ═══════════════════════════════════════════════════════════════
-    
-    printf("[GRAPH-CODE] Installing adaptive hot/cold memory management...\n");
-    
-    // LAYER 0: Configuration Nodes (graph-controlled parameters!)
-    g_config_hot_capacity = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_config_hot_capacity], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_config_hot_capacity]) = (float)g_hot_node_capacity;
-    node_theta(&g_graph.nodes[g_config_hot_capacity]) = 999.0f;  // Protected
-    g_graph.nodes[g_config_hot_capacity].data = 4.0f;  // Layer-4: config layer!
-    node_set_protected(&g_graph.nodes[g_config_hot_capacity], 1);
-    
-    g_config_promotion_threshold = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_config_promotion_threshold], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_config_promotion_threshold]) = 100.0f;  // Access 100+ times → promote
-    node_theta(&g_graph.nodes[g_config_promotion_threshold]) = 50.0f;  // Can adapt down to 50
-    g_graph.nodes[g_config_promotion_threshold].data = 4.0f;
-    node_set_protected(&g_graph.nodes[g_config_promotion_threshold], 1);
-    
-    g_config_eviction_threshold = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_config_eviction_threshold], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_config_eviction_threshold]) = 1.0f;  // Access <1 time in 1000 ticks → evict
-    node_theta(&g_graph.nodes[g_config_eviction_threshold]) = 0.1f;  // Can adapt to 0.1
-    g_graph.nodes[g_config_eviction_threshold].data = 4.0f;
-    node_set_protected(&g_graph.nodes[g_config_eviction_threshold], 1);
-    
-    g_config_prefetch_count = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[g_config_prefetch_count], OP_MEMORY);
-    node_memory_value(&g_graph.nodes[g_config_prefetch_count]) = 10.0f;  // Prefetch 10 neighbors
-    node_theta(&g_graph.nodes[g_config_prefetch_count]) = 5.0f;  // Can adapt 5-20
-    g_graph.nodes[g_config_prefetch_count].data = 4.0f;
-    node_set_protected(&g_graph.nodes[g_config_prefetch_count], 1);
-    
-    printf("[CONFIG] Graph-controlled config nodes created: hot_cap[%u] promote[%u] evict[%u] prefetch[%u]\n",
-           g_config_hot_capacity, g_config_promotion_threshold, 
-           g_config_eviction_threshold, g_config_prefetch_count);
-    
-    // LAYER 1: Performance Sensors (detect cold miss rate, memory pressure)
-    uint32_t cold_miss_sensor = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[cold_miss_sensor], OP_SIGMOID);
-    node_theta(&g_graph.nodes[cold_miss_sensor]) = 0.1f;  // Fire when >10% cold misses
-    g_graph.nodes[cold_miss_sensor].data = 4.0f;
-    node_set_protected(&g_graph.nodes[cold_miss_sensor], 1);
-    
-    uint32_t memory_pressure_sensor = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[memory_pressure_sensor], OP_THRESHOLD);
-    node_theta(&g_graph.nodes[memory_pressure_sensor]) = 0.9f;  // Fire when >90% hot capacity
-    g_graph.nodes[memory_pressure_sensor].data = 4.0f;
-    node_set_protected(&g_graph.nodes[memory_pressure_sensor], 1);
-    
-    // LAYER 2: Adaptation Controllers (graph adjusts config based on performance!)
-    uint32_t hot_capacity_controller = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[hot_capacity_controller], OP_GATE);
-    node_theta(&g_graph.nodes[hot_capacity_controller]) = 0.7f;
-    g_graph.nodes[hot_capacity_controller].data = 4.0f;
-    node_set_protected(&g_graph.nodes[hot_capacity_controller], 1);
-    
-    // Wire sensors → controllers → config nodes (GRAPH CAN MODIFY CONFIG!)
-    edge_create(&g_graph, cold_miss_sensor, hot_capacity_controller);
-    edge_create(&g_graph, memory_pressure_sensor, hot_capacity_controller);
-    edge_create(&g_graph, hot_capacity_controller, g_config_hot_capacity);
-    edge_create(&g_graph, hot_capacity_controller, g_config_promotion_threshold);
-    edge_create(&g_graph, hot_capacity_controller, g_config_eviction_threshold);
-    edge_create(&g_graph, thinker, cold_miss_sensor);  // Keep sensors active
-    edge_create(&g_graph, thinker, memory_pressure_sensor);
-    
-    printf("[ADAPTIVE] Hot/cold memory management installed:\n");
-    printf("  • 4 Config nodes (hot_capacity, promotion_thresh, eviction_thresh, prefetch)\n");
-    printf("  • 2 Sensor nodes (cold_miss_rate, memory_pressure)\n");
-    printf("  • 1 Controller node (adaptive capacity adjustment)\n");
-    printf("  • Graph will LEARN optimal config for current hardware!\n");
-    printf("  • Mac Mini → Jetson Orin AGX: Just retrain, no recompile!\n");
-    
-    // ═══════════════════════════════════════════════════════════════
-    // SELF-REFLECTION & OPTIMIZATION CIRCUIT
-    // ═══════════════════════════════════════════════════════════════
-    
-    printf("[GRAPH-CODE] Installing self-reflection circuit...\n");
-    uint32_t reflection = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[reflection], OP_EVAL);
-    node_set_meta(&g_graph.nodes[reflection], 1);
-    node_set_meta_op(&g_graph.nodes[reflection], META_OPTIMIZE_SUBGRAPH);
-    node_set_protected(&g_graph.nodes[reflection], 1);
-    
-    // Wire thinker to key circuits to keep them energized
-    edge_create(&g_graph, thinker, pattern_compiler);
-    // Wire thinker to hierarchical layers
-    for (int i = 0; i < 3; i++) {
-        edge_create(&g_graph, thinker, word_creator[i]);
-    }
-    edge_create(&g_graph, thinker, phrase_creator);
-    edge_create(&g_graph, thinker, concept_creator);
-    edge_create(&g_graph, thinker, reflection);
-    
-    // ═══════════════════════════════════════════════════════════════
-    // SUCCESS AMPLIFICATION CIRCUIT
-    // ═══════════════════════════════════════════════════════════════
-    
-    printf("[GRAPH-CODE] Installing success amplifier...\n");
-    uint32_t success_detector = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[success_detector], OP_COMPARE);
-    node_set_protected(&g_graph.nodes[success_detector], 1);
-    
-    // Wire to create_rate_controller - successful patterns increase node creation
-    edge_create(&g_graph, success_detector, create_rate_controller);
-    
-    // ═══════════════════════════════════════════════════════════════
-    // CONCEPT FORMATION CIRCUIT
-    // ═══════════════════════════════════════════════════════════════
-    
-    printf("[GRAPH-CODE] Installing concept abstraction circuit...\n");
-    uint32_t concept_former = node_create(&g_graph);
-    node_set_op_type(&g_graph.nodes[concept_former], OP_EVAL);
-    node_set_protected(&g_graph.nodes[concept_former], 1);
-    edge_create(&g_graph, freq_counter, concept_former);
-    
-    // ═══════════════════════════════════════════════════════════════
-    // MUTATION CIRCUIT (Evolutionary exploration)
-    // ═══════════════════════════════════════════════════════════════
-    
-    printf("[GRAPH-CODE] Installing mutation circuit...\n");
-    uint32_t mutator_nodes[3];
-    for (int i = 0; i < 3; i++) {
-        mutator_nodes[i] = node_create(&g_graph);
-        node_set_meta(&g_graph.nodes[mutator_nodes[i]], 1);
-        node_set_meta_op(&g_graph.nodes[mutator_nodes[i]], META_MUTATE_OP);
-        node_set_op_type(&g_graph.nodes[mutator_nodes[i]], OP_THRESHOLD);
-        node_theta(&g_graph.nodes[mutator_nodes[i]]) = 0.4f; // LOWER THRESHOLD (was 0.9)
-        g_graph.nodes[mutator_nodes[i]].a = 0.2f; // HIGHER baseline
-        node_set_protected(&g_graph.nodes[mutator_nodes[i]], 1);
-        
-        // CRITICAL FIX: Wire to thinker for continuous energy
-        edge_create(&g_graph, thinker, mutator_nodes[i]);
-        
-        // Wire to error sensor - high error triggers mutation
-        edge_create(&g_graph, error_sensor, mutator_nodes[i]);
-    }
-    
-    // ═══════════════════════════════════════════════════════════════
-    // SHORTCUT CREATION CIRCUIT (Skip connections)
-    // ═══════════════════════════════════════════════════════════════
-    
-    printf("[GRAPH-CODE] Installing shortcut creator...\n");
-    uint32_t shortcut_creator = node_create(&g_graph);
-    node_set_meta(&g_graph.nodes[shortcut_creator], 1);
-    node_set_meta_op(&g_graph.nodes[shortcut_creator], META_CREATE_SHORTCUT);
-    node_set_op_type(&g_graph.nodes[shortcut_creator], OP_THRESHOLD);
-    node_theta(&g_graph.nodes[shortcut_creator]) = 0.4f; // LOWER THRESHOLD (was 0.8)
-    g_graph.nodes[shortcut_creator].a = 0.2f; // Initialize with energy
-    node_set_protected(&g_graph.nodes[shortcut_creator], 1);
-    
-    // CRITICAL FIX: Wire to thinker + freq_counter
-    edge_create(&g_graph, thinker, shortcut_creator);
-    edge_create(&g_graph, freq_counter, shortcut_creator);
-    
-    // ═══════════════════════════════════════════════════════════════
-    // MODULE OPTIMIZATION CIRCUIT
-    // ═══════════════════════════════════════════════════════════════
-    
-    printf("[GRAPH-CODE] Installing module optimization circuit...\n");
-    uint32_t optimizer_nodes[3];
-    for (int i = 0; i < 3; i++) {
-        optimizer_nodes[i] = node_create(&g_graph);
-        node_set_meta(&g_graph.nodes[optimizer_nodes[i]], 1);
-        node_set_meta_op(&g_graph.nodes[optimizer_nodes[i]], META_OPTIMIZE_SUBGRAPH);
-        node_set_op_type(&g_graph.nodes[optimizer_nodes[i]], OP_GATE);
-        g_graph.nodes[optimizer_nodes[i]].a = 0.25f; // Start with energy
-        node_set_protected(&g_graph.nodes[optimizer_nodes[i]], 1);
-        
-        // CRITICAL FIX: Wire to thinker, reflection, AND freq_counter
-        edge_create(&g_graph, thinker, optimizer_nodes[i]);
-        edge_create(&g_graph, reflection, optimizer_nodes[i]);
-        edge_create(&g_graph, freq_counter, optimizer_nodes[i]); // Frequent patterns → optimize
-    }
-    
-    // ═══════════════════════════════════════════════════════════════
-    // OUTPUT LEARNING CIRCUIT - PURE GRAPH CODING!
-    // This circuit CREATES new command→response mappings autonomously!
-    // ═══════════════════════════════════════════════════════════════
-    
-    printf("[GRAPH-CODE] Installing output learning circuit (PURE GRAPH!)...\n");
-    
-    // CIRCUIT DESIGN:
-    // Input detector (high activation) → Response Generator → Output nodes
-    // The graph CREATES this circuit for each frequent input!
-    
-    // Step 1: Response Generator - OP_SPLICE nodes that create output nodes
-    uint32_t response_generators[10];
-    for (int i = 0; i < 10; i++) {
-        response_generators[i] = node_create(&g_graph);
-        node_set_op_type(&g_graph.nodes[response_generators[i]], OP_SPLICE);
-        node_theta(&g_graph.nodes[response_generators[i]]) = 0.6f; // Trigger on strong input
-        g_graph.nodes[response_generators[i]].a = 0.2f;
-        node_set_protected(&g_graph.nodes[response_generators[i]], 1);
-        
-        // Wire to thinker for continuous operation
-        edge_create(&g_graph, thinker, response_generators[i]);
-    }
-    
-    // Step 2: Output Wirer - OP_SPLICE nodes that wire detectors to outputs
-    uint32_t output_wirers[5];
-    for (int i = 0; i < 5; i++) {
-        output_wirers[i] = node_create(&g_graph);
-        node_set_op_type(&g_graph.nodes[output_wirers[i]], OP_SPLICE);
-        node_theta(&g_graph.nodes[output_wirers[i]]) = 0.7f;
-        g_graph.nodes[output_wirers[i]].a = 0.2f;
-        node_set_protected(&g_graph.nodes[output_wirers[i]], 1);
-        
-        // Wire to freq_counter - frequent patterns trigger wiring!
-        edge_create(&g_graph, freq_counter, output_wirers[i]);
-        edge_create(&g_graph, thinker, output_wirers[i]);
-    }
-    
-    printf("[GRAPH-CODE] Output learning circuit topology:\n");
-    printf("  • 10 Response Generators (OP_SPLICE) - create output nodes\n");
-    printf("  • 5 Output Wirers (OP_SPLICE) - wire detectors→outputs\n");
-    printf("  • Triggered by: frequent input patterns\n");
-    printf("  • Result: Graph learns new responses AUTONOMOUSLY!\n");
-    
-    printf("\n[META-BOOTSTRAP] ✓ Graph-based self-programming system installed!\n");
-    printf("[META-BOOTSTRAP] CRITICAL FIXES APPLIED:\n");
-    printf("  ✓ META nodes wired to thinker (continuous energy)\n");
-    printf("  ✓ Pruners wired to density sensor (trigger on density)\n");
-    printf("  ✓ Mutators wired to error sensor (trigger on error)\n");
-    printf("  ✓ Optimizers wired to freq_counter (trigger on patterns)\n");
-    printf("  ✓ Output learners created (spawn output nodes!)\n");
-    printf("  ✓ Thresholds lowered (0.3 instead of 0.5)\n");
-    printf("\n[META-BOOTSTRAP] Circuits live IN THE GRAPH:\n");
-    printf("  ✓ Hebbian learning (20 OP_SPLICE samplers) - ACTIVE\n");
-    printf("  ✓ Pattern tracking (OP_SEQUENCE counter) - WIRED\n");
-    printf("  ✓ Pruning (10 META_DELETE_EDGE nodes) - WIRED + ENERGIZED\n");
-    printf("  ✓ Node spawning (5 OP_FORK nodes) - ACTIVE\n");
-    printf("  ✓ Output learning (3 OP_FORK output creators) - NEW!\n");
-    printf("  ✓ Parameter adaptation (sensor→controller edges)\n");
-    printf("  ✓ Word abstraction (space detector + OP_EVAL creator)\n");
-    printf("  ✓ Continuous thinking (self-loop) - ACTIVE\n");
-    printf("  ✓ Mutation (3 META_MUTATE_OP nodes) - WIRED + ENERGIZED\n");
-    printf("  ✓ Shortcut creation (META_CREATE_SHORTCUT) - WIRED\n");
-    printf("  ✓ Module optimization (3 META_OPTIMIZE nodes) - WIRED + ENERGIZED\n");
-    printf("\n[META-BOOTSTRAP] C code = execution engine only!\n");
-    printf("[META-BOOTSTRAP] Graph code = everything else!\n");
-    printf("[META-BOOTSTRAP] META nodes now ACTIVE - watch them execute!\n\n");
+    // 1 Self-organizer - spawns new structure  
+    uint32_t o = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[o], OP_FORK);
+    node_theta(&g_graph.nodes[o]) = 0.5f;
+    g_graph.nodes[o].a = 0.3f;
+    node_set_protected(&g_graph.nodes[o], 1);
+    edge_create(&g_graph, t, o);
 }
+
 
 void seed_patterns() {
     // Clear byte lookup table
