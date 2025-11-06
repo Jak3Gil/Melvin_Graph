@@ -1,22 +1,29 @@
-# Makefile for melvin_core
+# Makefile for Melvin - Ultra-minimal VM + Legacy core
 
 CC = gcc
 CFLAGS = -O2 -Wall -Wextra -std=c99
 LDFLAGS = -lm -pthread
 
-TARGET = melvin_core
-SRC = melvin_core.c
+# Default: build minimal VM (93% smaller!)
+all: melvin_vm bootstrap_graph
 
-all: $(TARGET)
+# Minimal VM (286 lines, 34KB binary)
+melvin_vm: melvin_vm.c
+	$(CC) $(CFLAGS) -o melvin_vm melvin_vm.c $(LDFLAGS)
 
-$(TARGET): $(SRC)
-	$(CC) $(CFLAGS) -o $(TARGET) $(SRC) $(LDFLAGS)
+# Bootstrap compiler (creates graph.mmap)
+bootstrap_graph: bootstrap_graph.c
+	$(CC) $(CFLAGS) -o bootstrap_graph bootstrap_graph.c $(LDFLAGS)
+
+# Legacy full implementation (4110 lines, 89KB binary)
+melvin_core: melvin_core.c
+	$(CC) $(CFLAGS) -o melvin_core melvin_core.c $(LDFLAGS)
 
 clean:
-	rm -f $(TARGET) nodes.bin edges.bin
+	rm -f melvin_vm melvin_core bootstrap_graph graph.mmap nodes.bin edges.bin
 
-run: $(TARGET)
-	./$(TARGET)
+run: melvin_vm
+	./melvin_vm
 
 debug: CFLAGS = -g -Wall -Wextra -std=c99
 debug: $(TARGET)
