@@ -126,18 +126,55 @@ static inline float op_memory(Node *n) {
 }
 static inline float op_gate(Node *n) { return n->a * (soma[(n - nodes)] > theta[(n - nodes)] ? 1.0f : 0.0f); }
 
-// OP_SPLICE and OP_FORK are GRAPH-CODED (see OP_SPLICE logic in melvin_core.c)
-// They reference other graph structures to determine WHAT to create
-// C just provides the mechanism (node_create, edge_create)
-static inline float op_splice(Node *n) { return n->a; }  // Actual logic in propagate
-static inline float op_fork(Node *n) { return n->a; }    // Actual logic in propagate
+// OP_SPLICE: Creates edges at stride distance (theta=stride, value=weight)
+static inline float op_splice(Node *n) {
+    uint32_t idx = n - nodes;
+    if (soma[idx] < 0.3f) return n->a;
+    
+    uint32_t stride = (uint32_t)theta[idx];
+    uint8_t init_weight = (uint8_t)memory_value[idx];
+    
+    // Find active node pairs at stride distance - GRAPH PROGRAMMED!
+    for (uint32_t i = 0; i < node_count && i < 50; i++) {
+        if (nodes[i].a > 0.5f && i + stride < node_count && nodes[i + stride].a > 0.5f) {
+            if (edge_count < 100000) {
+                edges[edge_count].src = i;
+                edges[edge_count].dst = i + stride;
+                edges[edge_count].w_fast = init_weight;
+                edges[edge_count].w_slow = init_weight;
+                nodes[i].out_deg++;
+                nodes[i + stride].in_deg++;
+                edge_count++;
+                return 1.0f;
+            }
+        }
+    }
+    return n->a;
+}
 
-typedef float (*OpFunc)(Node*);
-static OpFunc ops[16] = {
-    op_compare, op_sum, op_product, op_max, op_min, op_threshold,
-    op_memory, op_sum, op_sum, op_sum, op_gate, op_sum,
-    op_splice, op_fork, op_sum, op_sum
-};
+// OP_FORK: Spawns new nodes between active pairs
+static inline float op_fork(Node *n) {
+    uint32_t idx = n - nodes;
+    if (soma[idx] < theta[idx] || node_count >= 10000) return n->a;
+    
+    for (uint32_t i = 0; i < node_count && i < 20; i++) {
+        if (nodes[i].a > 0.6f && i+1 < node_count && nodes[i+1].a > 0.6f) {
+            uint32_t new_idx = node_count++;
+            nodes[new_idx].id = new_idx;
+            nodes[new_idx].a = 0.0f;
+            theta[new_idx] = 0.5f;
+            flags[new_idx] = 1;  // OP_SUM
+            memory_value[new_idx] = 0.0f;
+            return 1.0f;
+        }
+    }
+    return n->a;
+}
+
+// Operation lookup (OP_SPLICE and OP_FORK handled specially)
+enum { OP_COMPARE=0, OP_SUM, OP_PRODUCT, OP_MAX, OP_MIN, OP_THRESHOLD,
+       OP_MEMORY, OP_UNUSED1, OP_UNUSED2, OP_UNUSED3, OP_GATE, OP_UNUSED4,
+       OP_SPLICE, OP_FORK, OP_JOIN, OP_EVAL };
 
 // ═══════════════════════════════════════════════════════════════
 // PROPAGATE - Pure activation spreading (NO logic!)
@@ -153,10 +190,29 @@ void propagate() {
         soma[e->dst] += nodes[e->src].a * e->w_fast / 255.0f;
     }
     
-    // Execute operations (pure function calls!)
+    // Execute operations
     for (uint32_t i = 0; i < node_count; i++) {
         uint8_t op = flags[i] & 0xFF;
-        nodes[i].a = ops[op](&nodes[i]);
+        
+        // OP_SPLICE and OP_FORK are special (create edges/nodes)
+        if (op == OP_SPLICE) {
+            nodes[i].a = op_splice(&nodes[i]);
+        } else if (op == OP_FORK) {
+            nodes[i].a = op_fork(&nodes[i]);
+        } else if (op < OP_SPLICE) {
+            // Standard operations
+            switch(op) {
+                case OP_COMPARE: nodes[i].a = op_compare(&nodes[i]); break;
+                case OP_SUM: nodes[i].a = op_sum(&nodes[i]); break;
+                case OP_PRODUCT: nodes[i].a = op_product(&nodes[i]); break;
+                case OP_MAX: nodes[i].a = op_max(&nodes[i]); break;
+                case OP_MIN: nodes[i].a = op_min(&nodes[i]); break;
+                case OP_THRESHOLD: nodes[i].a = op_threshold(&nodes[i]); break;
+                case OP_MEMORY: nodes[i].a = op_memory(&nodes[i]); break;
+                case OP_GATE: nodes[i].a = op_gate(&nodes[i]); break;
+                default: nodes[i].a = op_sum(&nodes[i]); break;
+            }
+        }
     }
 }
 
