@@ -65,6 +65,11 @@ uint32_t *flags = NULL;
 float *soma = NULL;  // Accumulator
 uint32_t node_count = 0;
 uint32_t edge_count = 0;
+uint64_t tick = 0;
+
+// For mmap sync
+static void *mmap_base = NULL;
+static size_t mmap_size = 0;
 
 // ═══════════════════════════════════════════════════════════════
 // LOAD GRAPH FROM MMAP
@@ -79,21 +84,22 @@ void load_graph(const char *filename) {
     
     struct stat st;
     fstat(fd, &st);
+    mmap_size = st.st_size;
     
-    void *base = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (base == MAP_FAILED) {
+    mmap_base = mmap(NULL, mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (mmap_base == MAP_FAILED) {
         write(STDERR_FILENO, "ERROR: mmap failed\n", 19);
         exit(1);
     }
     
-    Header *h = (Header*)base;
+    Header *h = (Header*)mmap_base;
     if (h->magic != 0xBEEF2024) {
         write(STDERR_FILENO, "ERROR: invalid graph file\n", 26);
         exit(1);
     }
     
     // Map structures
-    nodes = (Node*)((char*)base + sizeof(Header));
+    nodes = (Node*)((char*)mmap_base + sizeof(Header));
     edges = (Edge*)((char*)nodes + h->node_cap * sizeof(Node));
     theta = (float*)((char*)edges + h->edge_cap * sizeof(Edge) + 64*512);
     memory_value = theta + h->node_cap;
@@ -104,6 +110,18 @@ void load_graph(const char *filename) {
     
     // Allocate temp soma array
     soma = calloc(h->node_cap, sizeof(float));
+    
+    close(fd);  // Can close fd after mmap
+}
+
+void sync_graph() {
+    if (mmap_base) {
+        Header *h = (Header*)mmap_base;
+        h->node_count = node_count;
+        h->edge_count = edge_count;
+        h->tick = tick;
+        msync(mmap_base, mmap_size, MS_ASYNC);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -227,10 +245,25 @@ void process_input() {
     ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
     
     if (n > 0) {
-        // Activate byte nodes
-        for (ssize_t i = 0; i < n; i++) {
+        // Activate byte nodes (CREATE if new!)
+        for (ssize_t i = 0; i < n && i < 100; i++) {
             uint8_t byte = buf[i];
-            if (byte_to_node[byte] != 0) {
+            
+            if (byte_to_node[byte] == 0) {
+                // CREATE new byte node!
+                if (node_count < 10000) {
+                    uint32_t idx = node_count++;
+                    nodes[idx].id = idx;
+                    nodes[idx].a = 1.0f;
+                    nodes[idx].in_deg = 0;
+                    nodes[idx].out_deg = 0;
+                    theta[idx] = (float)byte;
+                    memory_value[idx] = (float)byte;
+                    flags[idx] = 6;  // OP_MEMORY
+                    byte_to_node[byte] = idx;
+                }
+            } else {
+                // Activate existing byte node
                 nodes[byte_to_node[byte]].a = 1.0f;
             }
         }
@@ -265,10 +298,8 @@ int main() {
     // Ready
     write(STDERR_FILENO, "melvin ready for input\n", 23);
     
-    // Map byte values to nodes (first 256 nodes after circuits)
-    for (uint32_t i = 0; i < 256 && i + 100 < node_count; i++) {
-        byte_to_node[i] = i + 100;  // Offset past circuit nodes
-    }
+    // Byte nodes created dynamically as input arrives!
+    // byte_to_node[] starts at 0 (no mappings)
     
     // Set stdin non-blocking
     fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL, 0) | O_NONBLOCK);
@@ -276,8 +307,16 @@ int main() {
     // Execute forever
     while (1) {
         process_input();   // Read bytes → activate nodes
-        propagate();       // Spread activation
+        propagate();       // Spread activation (OP_SPLICE creates edges!)
         process_output();  // Write active outputs
+        
+        tick++;
+        
+        // Sync graph every 100 ticks (persist learning!)
+        if (tick % 100 == 0) {
+            sync_graph();
+        }
+        
         usleep(50000);     // 50ms tick
     }
     
