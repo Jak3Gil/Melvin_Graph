@@ -474,6 +474,13 @@ typedef struct {
 Graph   g_graph;
 System  g_sys;
 
+// Parameter nodes - Graph controls its own hyperparameters!
+static uint32_t g_node_eta_fast = UINT32_MAX;
+static uint32_t g_node_epsilon = UINT32_MAX;
+static uint32_t g_node_lambda_e = UINT32_MAX;
+static uint32_t g_node_energy = UINT32_MAX;
+static uint32_t g_node_error_sensor = UINT32_MAX;
+
 /* ========================================================================
  * FORWARD DECLARATIONS
  * ======================================================================== */
@@ -2163,10 +2170,12 @@ uint32_t macro_add(const uint8_t *bytes, uint16_t len) {
 // macro_add_defaults() REMOVED - graph learns all patterns from input
 
 uint32_t macro_select() {
-    // ε-greedy
+    // ε-greedy (READ EPSILON FROM GRAPH!)
+    float epsilon = (g_node_epsilon != UINT32_MAX) ?
+        node_memory_value(&g_graph.nodes[g_node_epsilon]) : 0.2f;
     float r = (float)rand() / RAND_MAX;
     
-    if (r < g_sys.epsilon) {
+    if (r < epsilon) {
         // Random
         return rand() % g_sys.macro_count;
     } else {
@@ -2507,11 +2516,15 @@ void observe_and_update() {
         // Update average usefulness for slow track
         edge_avg_U(e) = 0.95f * edge_avg_U(e) + 0.05f * U_ij;
         
-        // Eligibility trace (continuous)
-        edge_eligibility(e) = g_sys.lambda_e * edge_eligibility(e) + node_a_prev(src);
+        // Eligibility trace (READ FROM GRAPH!)
+        float lambda_e = (g_node_lambda_e != UINT32_MAX) ? 
+            node_memory_value(&g_graph.nodes[g_node_lambda_e]) : 0.9f;
+        edge_eligibility(e) = lambda_e * edge_eligibility(e) + node_a_prev(src);
         
-        // Fast weight update (continuous, no branches)
-        float delta_fast = g_sys.eta_fast * U_ij * edge_eligibility(e);
+        // Fast weight update (READ LEARNING RATE FROM GRAPH!)
+        float eta_fast = (g_node_eta_fast != UINT32_MAX) ?
+            node_memory_value(&g_graph.nodes[g_node_eta_fast]) : 3.0f;
+        float delta_fast = eta_fast * U_ij * edge_eligibility(e);
         // Soft clamp using tanh
         delta_fast = g_sys.delta_max * tanhf(delta_fast / g_sys.delta_max);
         
@@ -2549,12 +2562,25 @@ void observe_and_update() {
     g_sys.mean_error = edge_count_active > 0 ? total_error / edge_count_active : 0.0f;
     g_sys.mean_surprise = edge_count_active > 0 ? total_surprise / edge_count_active : 0.0f;
     
-    // Update energy field: increases with surprise, decays over time (adaptive)
-    g_sys.energy = g_sys.energy_decay * g_sys.energy + g_sys.energy_alpha * g_sys.mean_surprise;
+    // WRITE ERROR TO GRAPH NODE (graph can read this!)
+    if (g_node_error_sensor != UINT32_MAX) {
+        node_memory_value(&g_graph.nodes[g_node_error_sensor]) = g_sys.mean_error;
+        g_graph.nodes[g_node_error_sensor].a = g_sys.mean_error;  // Activation = error level
+    }
     
-    // Modulate exploration rate via energy
-    // High energy → more exploration; low energy → more exploitation
-    g_sys.epsilon = g_sys.epsilon_min + (g_sys.epsilon_max - g_sys.epsilon_min) * sigmoid(g_sys.energy - 0.5f);
+    // WRITE ENERGY TO GRAPH NODE (graph controls its own energy!)
+    if (g_node_energy != UINT32_MAX) {
+        float current_energy = node_memory_value(&g_graph.nodes[g_node_energy]);
+        float new_energy = g_sys.energy_decay * current_energy + g_sys.energy_alpha * g_sys.mean_surprise;
+        node_memory_value(&g_graph.nodes[g_node_energy]) = new_energy;
+        g_graph.nodes[g_node_energy].a = new_energy;
+        g_sys.energy = new_energy;  // Mirror to C for compatibility
+    }
+    
+    // READ EPSILON FROM GRAPH (graph modulates its own exploration!)
+    if (g_node_epsilon != UINT32_MAX) {
+        g_sys.epsilon = node_memory_value(&g_graph.nodes[g_node_epsilon]);
+    }
 }
 
 /* ========================================================================
@@ -4008,6 +4034,51 @@ void bootstrap_meta_circuits() {
     g_graph.nodes[t].a = 0.4f;
     edge_create(&g_graph, t, t);
     node_set_protected(&g_graph.nodes[t], 1);
+    
+    // PARAMETER NODES - Graph controls its own learning!
+    g_node_eta_fast = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_eta_fast], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_eta_fast]) = 3.0f;  // Initial learning rate
+    node_theta(&g_graph.nodes[g_node_eta_fast]) = 1.0f;  // Min value
+    g_graph.nodes[g_node_eta_fast].data = 10.0f;  // Max value
+    node_set_protected(&g_graph.nodes[g_node_eta_fast], 1);
+    
+    g_node_epsilon = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_epsilon], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_epsilon]) = 0.2f;  // Initial exploration
+    node_theta(&g_graph.nodes[g_node_epsilon]) = 0.05f;  // Min
+    g_graph.nodes[g_node_epsilon].data = 0.5f;  // Max
+    node_set_protected(&g_graph.nodes[g_node_epsilon], 1);
+    
+    g_node_lambda_e = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_lambda_e], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_lambda_e]) = 0.9f;  // Initial eligibility
+    node_set_protected(&g_graph.nodes[g_node_lambda_e], 1);
+    
+    g_node_energy = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_energy], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_energy]) = 0.0f;  // Start at zero
+    node_set_protected(&g_graph.nodes[g_node_energy], 1);
+    
+    // Error sensor - measures prediction accuracy
+    g_node_error_sensor = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_error_sensor], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_error_sensor]) = 0.0f;
+    node_set_protected(&g_graph.nodes[g_node_error_sensor], 1);
+    
+    // Wire error → learning rate (high error → increase learning rate!)
+    uint32_t e_idx = edge_create(&g_graph, g_node_error_sensor, g_node_eta_fast);
+    if (e_idx != UINT32_MAX) {
+        g_graph.edges[e_idx].w_fast = 50;  // Error influences learning rate
+        g_graph.edges[e_idx].w_slow = 50;
+    }
+    
+    // Wire error → epsilon (high error → more exploration!)
+    e_idx = edge_create(&g_graph, g_node_error_sensor, g_node_epsilon);
+    if (e_idx != UINT32_MAX) {
+        g_graph.edges[e_idx].w_fast = 30;
+        g_graph.edges[e_idx].w_slow = 30;
+    }
     
     // 5 Hebbian samplers - create edges between co-active nodes
     for (int i = 0; i < 5; i++) {
