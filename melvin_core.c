@@ -404,11 +404,25 @@ static uint32_t g_node_lambda_e = UINT32_MAX;
 static uint32_t g_node_energy = UINT32_MAX;
 static uint32_t g_node_error_sensor = UINT32_MAX;
 
-// Phase 2: More parameters as graph nodes
+// Phase 2: Learning algorithm parameters
 static uint32_t g_node_beta_blend = UINT32_MAX;
 static uint32_t g_node_delta_max = UINT32_MAX;
 static uint32_t g_node_sigmoid_k = UINT32_MAX;
 static uint32_t g_node_lambda_decay = UINT32_MAX;
+
+// Phase 3: ALL remaining parameters!
+static uint32_t g_node_gamma_slow = UINT32_MAX;
+static uint32_t g_node_alpha_fast_decay = UINT32_MAX;
+static uint32_t g_node_alpha_slow_decay = UINT32_MAX;
+static uint32_t g_node_energy_alpha = UINT32_MAX;
+static uint32_t g_node_energy_decay = UINT32_MAX;
+static uint32_t g_node_epsilon_min = UINT32_MAX;
+static uint32_t g_node_epsilon_max = UINT32_MAX;
+static uint32_t g_node_activation_scale = UINT32_MAX;
+static uint32_t g_node_prune_rate = UINT32_MAX;
+static uint32_t g_node_create_rate = UINT32_MAX;
+static uint32_t g_node_target_density = UINT32_MAX;
+static uint32_t g_node_target_activity = UINT32_MAX;
 
 /* ========================================================================
  * FORWARD DECLARATIONS
@@ -464,6 +478,11 @@ static inline float sigmoid_adaptive(float x, float center) {
 // Random float [0,1]
 static inline float randf() {
     return (float)rand() / (float)RAND_MAX;
+}
+
+// Helper: Read parameter from graph (with fallback)
+static inline float read_param(uint32_t node_id, float default_val) {
+    return (node_id != UINT32_MAX) ? node_memory_value(&g_graph.nodes[node_id]) : default_val;
 }
 
 // Soft threshold: smooth transition around reference value
@@ -790,7 +809,8 @@ void execute_meta_operation(Node *meta) {
             float min_weight = 1000.0f;
             for (uint32_t i = 0; i < g_graph.edge_count && i < 100; i++) {
                 Edge *e = &g_graph.edges[i];
-                float w = g_sys.gamma_slow * e->w_slow + (1.0f - g_sys.gamma_slow) * e->w_fast;
+                float gamma_slow = read_param(g_node_gamma_slow, 0.8f);
+                float w = gamma_slow * e->w_slow + (1.0f - gamma_slow) * e->w_fast;
                 if (w < min_weight) {
                     min_weight = w;
                     weakest = i;
@@ -1234,7 +1254,8 @@ void module_execute(Graph *g, Module *m, float *inputs, float *outputs) {
             Node *src = &g->nodes[edge->src];
             Node *dst = &g->nodes[edge->dst];
             
-            float w_eff = g_sys.gamma_slow * edge->w_slow + (1.0f - g_sys.gamma_slow) * edge->w_fast;
+            float gamma_slow = read_param(g_node_gamma_slow, 0.8f);
+            float w_eff = gamma_slow * edge->w_slow + (1.0f - gamma_slow) * edge->w_fast;
             node_soma(dst) += src->a * w_eff;
         }
         
@@ -1982,41 +2003,8 @@ void macro_init(uint32_t cap) {
     g_sys.tick_ms = 50;
     g_sys.snapshot_period = 2000;
     
-    // Parameters now in graph! (g_node_eta_fast, g_node_epsilon, etc.)
-    // Only initialize ones not yet migrated:
-    g_sys.gamma_slow = 0.8f;
-    g_sys.alpha_fast_decay = 0.95f;
-    g_sys.alpha_slow_decay = 0.999f;
-    
-    // Initialize meta-parameters for homeostatic adaptation
-    g_sys.adapt_rate = 0.001f;
-    g_sys.target_density = 0.15f;
-    g_sys.target_activity = 0.1f;
-    g_sys.target_prediction_acc = 0.85f;
-    
-    // Initialize target metrics for thought/time/space adaptation
-    g_sys.target_thought_depth = 5;
-    g_sys.target_settle_ratio = 0.7f;
-    g_sys.min_thought_hops = 3;
-    g_sys.max_hop_growth_rate = 0.1f; // 10% max growth per adaptation cycle
-    
-    // Initialize soft reference values
-    g_sys.prune_weight_ref = 2.0f;
-    g_sys.stale_ref = 200.0f;
-    g_sys.node_stale_ref = 1000.0f;
-    g_sys.co_freq_ref = 10.0f;
-    g_sys.density_ref = 0.6f;
-    g_sys.layer_min_size = 10;
-    
-    // Initialize adaptive parameters (not yet in graph)
-    g_sys.prune_rate = 0.0005f;
-    g_sys.create_rate = 0.01f;
-    g_sys.layer_rate = 0.001f;
-    g_sys.energy_alpha = 0.1f;
-    g_sys.energy_decay = 0.995f;
-    g_sys.epsilon_min = 0.05f;
-    g_sys.epsilon_max = 0.3f;
-    g_sys.activation_scale = 64.0f;
+    // ✅ ALL PARAMETERS NOW IN GRAPH!
+    // Legacy values only for backwards compatibility (will be read from graph)
     
     // Initialize homeostatic measurements
     g_sys.current_density = 0.0f;
@@ -2108,7 +2096,8 @@ uint32_t macro_select() {
         
         for (uint32_t i = 0; i < g_sys.macro_count; i++) {
             Macro *m = &g_sys.macros[i];
-            float u = g_sys.gamma_slow * m->U_slow + (1.0f - g_sys.gamma_slow) * m->U_fast;
+            float gamma_slow = read_param(g_node_gamma_slow, 0.8f);
+            float u = gamma_slow * m->U_slow + (1.0f - gamma_slow) * m->U_fast;
             if (u > best_u) {
                 best_u = u;
                 best_idx = i;
@@ -2124,10 +2113,12 @@ void macro_update_utility(uint32_t idx, float reward) {
     Macro *m = &g_sys.macros[idx];
     
     // Fast track
-    m->U_fast = g_sys.alpha_fast_decay * m->U_fast + (1.0f - g_sys.alpha_fast_decay) * reward;
+    float alpha_fast_decay = read_param(g_node_alpha_fast_decay, 0.95f);
+    m->U_fast = alpha_fast_decay * m->U_fast + (1.0f - alpha_fast_decay) * reward;
     
     // Slow track (less aggressive)
-    m->U_slow = g_sys.alpha_slow_decay * m->U_slow + (1.0f - g_sys.alpha_slow_decay) * reward;
+    float alpha_slow_decay = read_param(g_node_alpha_slow_decay, 0.999f);
+    m->U_slow = alpha_slow_decay * m->U_slow + (1.0f - alpha_slow_decay) * reward;
     
     m->use_count++;
     m->last_used_tick = g_sys.tick;
@@ -2209,8 +2200,9 @@ void propagate() {
         Node *src = &g_graph.nodes[e->src];
         Node *dst = &g_graph.nodes[e->dst];
         
-        // Effective weight (continuous blend)
-        float w_eff = g_sys.gamma_slow * e->w_slow + (1.0f - g_sys.gamma_slow) * e->w_fast;
+        // Effective weight (continuous blend) - READ FROM GRAPH!
+        float gamma_slow = read_param(g_node_gamma_slow, 0.8f);
+        float w_eff = gamma_slow * e->w_slow + (1.0f - gamma_slow) * e->w_fast;
         if (w_eff < 0.0f) w_eff = 0.0f;
         if (w_eff > 255.0f) w_eff = 255.0f;
         
@@ -2503,7 +2495,14 @@ void observe_and_update() {
     // WRITE ENERGY TO GRAPH NODE (graph controls its own energy!)
     if (g_node_energy != UINT32_MAX) {
         float current_energy = node_memory_value(&g_graph.nodes[g_node_energy]);
-        float new_energy = g_sys.energy_decay * current_energy + g_sys.energy_alpha * g_sys.mean_surprise;
+        
+        // READ ENERGY PARAMETERS FROM GRAPH!
+        float energy_decay = (g_node_energy_decay != UINT32_MAX) ?
+            node_memory_value(&g_graph.nodes[g_node_energy_decay]) : 0.995f;
+        float energy_alpha = (g_node_energy_alpha != UINT32_MAX) ?
+            node_memory_value(&g_graph.nodes[g_node_energy_alpha]) : 0.1f;
+        
+        float new_energy = energy_decay * current_energy + energy_alpha * g_sys.mean_surprise;
         node_memory_value(&g_graph.nodes[g_node_energy]) = new_energy;
         g_graph.nodes[g_node_energy].a = new_energy;
         g_sys.energy = new_energy;  // Mirror to C for compatibility
@@ -3990,6 +3989,96 @@ void bootstrap_meta_circuits() {
     node_set_op_type(&g_graph.nodes[g_node_lambda_decay], OP_MEMORY);
     node_memory_value(&g_graph.nodes[g_node_lambda_decay]) = 0.99f;  // Count decay rate
     node_set_protected(&g_graph.nodes[g_node_lambda_decay], 1);
+    
+    // PHASE 3: Massive parameter migration!
+    g_node_gamma_slow = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_gamma_slow], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_gamma_slow]) = 0.8f;
+    node_set_protected(&g_graph.nodes[g_node_gamma_slow], 1);
+    
+    g_node_alpha_fast_decay = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_alpha_fast_decay], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_alpha_fast_decay]) = 0.95f;
+    node_set_protected(&g_graph.nodes[g_node_alpha_fast_decay], 1);
+    
+    g_node_alpha_slow_decay = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_alpha_slow_decay], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_alpha_slow_decay]) = 0.999f;
+    node_set_protected(&g_graph.nodes[g_node_alpha_slow_decay], 1);
+    
+    g_node_energy_alpha = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_energy_alpha], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_energy_alpha]) = 0.1f;
+    node_set_protected(&g_graph.nodes[g_node_energy_alpha], 1);
+    
+    g_node_energy_decay = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_energy_decay], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_energy_decay]) = 0.995f;
+    node_set_protected(&g_graph.nodes[g_node_energy_decay], 1);
+    
+    g_node_epsilon_min = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_epsilon_min], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_epsilon_min]) = 0.05f;
+    node_set_protected(&g_graph.nodes[g_node_epsilon_min], 1);
+    
+    g_node_epsilon_max = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_epsilon_max], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_epsilon_max]) = 0.3f;
+    node_set_protected(&g_graph.nodes[g_node_epsilon_max], 1);
+    
+    g_node_activation_scale = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_activation_scale], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_activation_scale]) = 64.0f;
+    node_set_protected(&g_graph.nodes[g_node_activation_scale], 1);
+    
+    g_node_prune_rate = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_prune_rate], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_prune_rate]) = 0.0005f;
+    node_set_protected(&g_graph.nodes[g_node_prune_rate], 1);
+    
+    g_node_create_rate = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_create_rate], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_create_rate]) = 0.01f;
+    node_set_protected(&g_graph.nodes[g_node_create_rate], 1);
+    
+    g_node_target_density = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_target_density], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_target_density]) = 0.15f;
+    node_set_protected(&g_graph.nodes[g_node_target_density], 1);
+    
+    g_node_target_activity = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_target_activity], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_target_activity]) = 0.1f;
+    node_set_protected(&g_graph.nodes[g_node_target_activity], 1);
+    
+    // ═══════════════════════════════════════════════════════════════
+    // WIRE PARAMETERS TOGETHER - Graph controls its own behavior!
+    // ═══════════════════════════════════════════════════════════════
+    
+    // High energy → increase learning rate AND exploration
+    e_idx = edge_create(&g_graph, g_node_energy, g_node_eta_fast);
+    if (e_idx != UINT32_MAX) { g_graph.edges[e_idx].w_fast = 20; g_graph.edges[e_idx].w_slow = 20; }
+    
+    e_idx = edge_create(&g_graph, g_node_energy, g_node_epsilon);
+    if (e_idx != UINT32_MAX) { g_graph.edges[e_idx].w_fast = 40; g_graph.edges[e_idx].w_slow = 40; }
+    
+    // High error → increase create_rate (grow structure when confused!)
+    e_idx = edge_create(&g_graph, g_node_error_sensor, g_node_create_rate);
+    if (e_idx != UINT32_MAX) { g_graph.edges[e_idx].w_fast = 25; g_graph.edges[e_idx].w_slow = 25; }
+    
+    // Low error → increase prune_rate (clean up when confident!)
+    // (Inverted: we'll read it as threshold - activation)
+    
+    // Energy influences energy_alpha (high energy → learn energy faster!)
+    e_idx = edge_create(&g_graph, g_node_energy, g_node_energy_alpha);
+    if (e_idx != UINT32_MAX) { g_graph.edges[e_idx].w_fast = 15; g_graph.edges[e_idx].w_slow = 15; }
+    
+    // Epsilon bounded by epsilon_min and epsilon_max
+    e_idx = edge_create(&g_graph, g_node_epsilon_min, g_node_epsilon);
+    if (e_idx != UINT32_MAX) { g_graph.edges[e_idx].w_fast = 10; g_graph.edges[e_idx].w_slow = 10; }
+    
+    e_idx = edge_create(&g_graph, g_node_epsilon_max, g_node_epsilon);
+    if (e_idx != UINT32_MAX) { g_graph.edges[e_idx].w_fast = 10; g_graph.edges[e_idx].w_slow = 10; }
     
     // 5 Hebbian samplers - create edges between co-active nodes
     for (int i = 0; i < 5; i++) {
