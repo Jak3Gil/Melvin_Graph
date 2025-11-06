@@ -54,13 +54,9 @@
 /* ========================================================================
  * SILENT MODE - Disable all debug output
  * ======================================================================== */
-#define SILENT_MODE 1
-
-#if SILENT_MODE
-  #define printf(...) ((void)0)
-  #define fprintf(...) ((void)0)
-  #define fflush(...) ((void)0)
-#endif
+#define printf(...) ((void)0)
+#define fprintf(stream, ...) ((void)0) 
+#define fflush(...) ((void)0)
 
 /* ========================================================================
  * COMPILE-TIME CONSTANTS
@@ -4106,14 +4102,8 @@ int main(int argc, char **argv) {
     
     system_init(node_cap, edge_cap, detector_cap, macro_cap);
     
-    // Graph automatically restores from graph.mmap if it exists
-    
-    printf("=== MELVIN CORE STARTING ===\n");
-    printf("Pure self-programming system - ALL INPUT IS CODE\n");
-    printf("Graph learns its own language from patterns in input\n");
-    printf("Tick period: %u ms\n", g_sys.tick_ms);
-    printf("Press Ctrl+C to stop.\n\n");
-    fflush(stdout);
+    // Single status message (bypasses printf macro by using write directly)
+    write(STDERR_FILENO, "melvin ready for input\n", 23);
     
     main_loop();
     
