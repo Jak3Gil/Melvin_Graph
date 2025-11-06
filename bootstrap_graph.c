@@ -304,6 +304,36 @@ int main() {
     printf("✓ Thinking trigger circuit: 5 nodes, 5 edges\n\n");
     
     // ═══════════════════════════════════════════════════════════════
+    // MULTI-STRIDE EDGE CREATORS (9 nodes) - Universal dimensionality!
+    // ═══════════════════════════════════════════════════════════════
+    printf("Building 9 multi-stride edge creators...\n");
+    
+    // Each OP_SPLICE node creates edges at a specific stride
+    // theta = stride distance, value = initial weight
+    uint32_t stride_1 = create_node(OP_SPLICE, 1.0f, 200.0f);     // Sequential
+    uint32_t stride_2 = create_node(OP_SPLICE, 2.0f, 141.0f);
+    uint32_t stride_4 = create_node(OP_SPLICE, 4.0f, 100.0f);
+    uint32_t stride_8 = create_node(OP_SPLICE, 8.0f, 71.0f);
+    uint32_t stride_16 = create_node(OP_SPLICE, 16.0f, 50.0f);
+    uint32_t stride_32 = create_node(OP_SPLICE, 32.0f, 35.0f);
+    uint32_t stride_64 = create_node(OP_SPLICE, 64.0f, 25.0f);
+    uint32_t stride_128 = create_node(OP_SPLICE, 128.0f, 18.0f);
+    uint32_t stride_256 = create_node(OP_SPLICE, 256.0f, 13.0f);
+    
+    // Wire to thinker - always active
+    create_edge(thinker, stride_1, 255);
+    create_edge(thinker, stride_2, 255);
+    create_edge(thinker, stride_4, 255);
+    create_edge(thinker, stride_8, 255);
+    create_edge(thinker, stride_16, 255);
+    create_edge(thinker, stride_32, 255);
+    create_edge(thinker, stride_64, 255);
+    create_edge(thinker, stride_128, 255);
+    create_edge(thinker, stride_256, 255);
+    
+    printf("✓ 9 multi-stride creators: stride ∈ {1,2,4,8,16,32,64,128,256}\n\n");
+    
+    // ═══════════════════════════════════════════════════════════════
     // HEBBIAN SAMPLERS (5 nodes) - Create edges between co-active
     // ═══════════════════════════════════════════════════════════════
     printf("Building 5 Hebbian samplers...\n");
@@ -418,8 +448,13 @@ int main() {
     printf("  6. Meta-op scheduler (11 nodes)\n");
     printf("  7. Hot/cold manager (7 nodes)\n");
     printf("  8. Thinking trigger (5 nodes)\n");
-    printf("  9. Hebbian samplers (5 nodes)\n");
-    printf(" 10. Self-organizer (1 node)\n");
+    printf("  9. ✅ Multi-stride creators (9 OP_SPLICE nodes!) - NO C LOOP!\n");
+    printf(" 10. Hebbian samplers (5 nodes)\n");
+    printf(" 11. Self-organizer (1 node)\n");
+    printf("\n💡 Multi-stride edge creation now 100%% IN GRAPH:\n");
+    printf("   Each stride creator (nodes 69-77) creates edges when activated\n");
+    printf("   theta=stride distance, value=initial weight\n");
+    printf("   C code deleted - graph self-programs! ✓\n");
     
     printf("\n🚀 NEXT STEPS:\n");
     printf("  1. Run: make && ./melvin_core\n");

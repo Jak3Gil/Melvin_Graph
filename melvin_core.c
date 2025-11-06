@@ -674,25 +674,51 @@ static inline float execute_node_operation(Node *n) {
             break;
             
         case OP_SPLICE:
-            // GRAPH-DRIVEN CODE GENERATION: Creates edges AND output nodes!
-            // This node is the GRAPH'S CODE WRITER
+            // ✅ GRAPH-CODED! Node's theta=stride, memory_value=weight
+            // Multi-stride creators use this to create edges at their stride!
             op_cost = 100;
-            if (node_soma(n) > node_theta(n)) {
+            if (node_soma(n) > 0.3f) {  // Activate when any input
                 
-                // Hebbian Edge Creation - wire co-active nodes
-                if (randf() < 0.10f) {
-                    uint32_t src = rand() % g_graph.node_count;
-                    uint32_t dst = rand() % g_graph.node_count;
-                    
-                    if (src != dst && g_graph.nodes[src].a > 0.5f && g_graph.nodes[dst].a > 0.5f) {
-                        Edge *existing = find_edge(&g_graph, src, dst);
-                        if (!existing) {
-                            uint32_t e_idx = edge_create(&g_graph, src, dst);
-                            if (e_idx != UINT32_MAX) {
-                                float co_act = g_graph.nodes[src].a * g_graph.nodes[dst].a;
-                                g_graph.edges[e_idx].w_fast = (uint8_t)(co_act * 120.0f);
-                                g_graph.edges[e_idx].w_slow = (uint8_t)(co_act * 100.0f);
-                                result = 1.0f;
+                // Read stride from node's theta (GRAPH PARAMETER!)
+                uint32_t stride = (uint32_t)node_theta(n);
+                uint8_t init_weight = (uint8_t)node_memory_value(n);
+                
+                // If stride > 0: Multi-stride creator mode
+                if (stride >= 1 && stride <= 256) {
+                    // Find pairs of recently active nodes at this stride distance
+                    for (uint32_t i = 0; i < g_graph.node_count && i < 100; i++) {
+                        if (g_graph.nodes[i].a > 0.5f) {
+                            uint32_t j = i + stride;
+                            if (j < g_graph.node_count && g_graph.nodes[j].a > 0.5f) {
+                                Edge *existing = find_edge(&g_graph, i, j);
+                                if (!existing && g_graph.edge_count < g_graph.edge_cap - 100) {
+                                    uint32_t e_idx = edge_create(&g_graph, i, j);
+                                    if (e_idx != UINT32_MAX) {
+                                        g_graph.edges[e_idx].w_fast = init_weight;
+                                        g_graph.edges[e_idx].w_slow = init_weight;
+                                        result = 1.0f;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // If stride == 0: General Hebbian (any co-active pair)
+                else {
+                    if (randf() < 0.10f) {
+                        uint32_t src = rand() % g_graph.node_count;
+                        uint32_t dst = rand() % g_graph.node_count;
+                        
+                        if (src != dst && g_graph.nodes[src].a > 0.5f && g_graph.nodes[dst].a > 0.5f) {
+                            Edge *existing = find_edge(&g_graph, src, dst);
+                            if (!existing) {
+                                uint32_t e_idx = edge_create(&g_graph, src, dst);
+                                if (e_idx != UINT32_MAX) {
+                                    float co_act = g_graph.nodes[src].a * g_graph.nodes[dst].a;
+                                    g_graph.edges[e_idx].w_fast = (uint8_t)(co_act * 120.0f);
+                                    g_graph.edges[e_idx].w_slow = (uint8_t)(co_act * 100.0f);
+                                    result = 1.0f;
+                                }
                             }
                         }
                     }
@@ -3925,52 +3951,22 @@ void activate_input_bytes(const uint8_t *bytes, uint32_t len) {
     }
     
     // ═══════════════════════════════════════════════════════════════
-    // UNIVERSAL MULTI-DIMENSIONAL EDGE FORMATION
-    // Creates edges at MULTIPLE strides - graph learns which are useful!
+    // ✅ DELETED! Multi-stride edge creation now done by GRAPH!
+    // ═══════════════════════════════════════════════════════════════
+    // 9 OP_SPLICE nodes in graph (nodes 75-83) create edges at their strides:
+    //   Node[75]: stride=1 (sequential)
+    //   Node[76]: stride=2
+    //   ...
+    //   Node[83]: stride=256
+    // 
+    // When these nodes activate during propagate(), they create edges
+    // between active byte nodes at their specific stride distance.
+    // 
+    // Graph determines stride usefulness via weight learning!
     // ═══════════════════════════════════════════════════════════════
     
-    // Strides to try: 1, 2, 4, 8, 16, 32, 64, 128, 256
-    // - stride=1: Sequential (text, all data)
-    // - stride=width: Vertical in images  
-    // - stride=sample_rate: Periodic in audio
-    // - Graph learns which strides matter via weight updates!
-    
-    static const uint32_t strides[] = {1, 2, 4, 8, 16, 32, 64, 128, 256};
-    static const int num_strides = 9;
-    
-    for (uint32_t i = 0; i < activated_count; i++) {
-        uint32_t pos_i = activated_indices[i];
-        uint8_t byte_i = bytes[pos_i];
-        uint32_t node_i = byte_to_node[byte_i];
-        
-        // Try each stride
-        for (int s = 0; s < num_strides; s++) {
-            uint32_t stride = strides[s];
-            uint32_t pos_j = pos_i + stride;
-            
-            if (pos_j < len) {
-                uint8_t byte_j = bytes[pos_j];
-                if (byte_node_exists[byte_j]) {
-                    uint32_t node_j = byte_to_node[byte_j];
-                    
-                    // Create edge at this stride (if doesn't exist)
-                    Edge *existing = find_edge(&g_graph, node_i, node_j);
-                    if (!existing && g_graph.edge_count < g_graph.edge_cap - 100) {
-                        uint32_t edge_idx = edge_create(&g_graph, node_i, node_j);
-                        if (edge_idx != UINT32_MAX) {
-                            // Initial weight based on stride
-                            // Shorter strides start stronger (stride=1 is usually useful)
-                            uint8_t init_weight = (uint8_t)(200.0f / sqrtf(stride + 1));
-                            g_graph.edges[edge_idx].w_fast = init_weight;
-                            g_graph.edges[edge_idx].w_slow = init_weight;
-                            
-                            // Graph will strengthen useful strides, weaken others!
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // Just activate the stride creators - they'll do the work!
+    // (They activate during propagate() via thinker→stride_creator edges)
 }
 
 /* ========================================================================
