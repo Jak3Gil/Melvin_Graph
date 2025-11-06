@@ -404,6 +404,12 @@ static uint32_t g_node_lambda_e = UINT32_MAX;
 static uint32_t g_node_energy = UINT32_MAX;
 static uint32_t g_node_error_sensor = UINT32_MAX;
 
+// Phase 2: More parameters as graph nodes
+static uint32_t g_node_beta_blend = UINT32_MAX;
+static uint32_t g_node_delta_max = UINT32_MAX;
+static uint32_t g_node_sigmoid_k = UINT32_MAX;
+static uint32_t g_node_lambda_decay = UINT32_MAX;
+
 /* ========================================================================
  * FORWARD DECLARATIONS
  * ======================================================================== */
@@ -448,9 +454,11 @@ static inline float sigmoid_scaled(float x, float center, float k) {
     return sigmoid(k * (x - center));
 }
 
-// Adaptive sigmoid using system's current steepness
+// Adaptive sigmoid using graph's current steepness
 static inline float sigmoid_adaptive(float x, float center) {
-    return sigmoid_scaled(x, center, g_sys.sigmoid_k);
+    float k = (g_node_sigmoid_k != UINT32_MAX) ? 
+        node_memory_value(&g_graph.nodes[g_node_sigmoid_k]) : 0.5f;
+    return sigmoid_scaled(x, center, k);
 }
 
 // Random float [0,1]
@@ -1974,13 +1982,9 @@ void macro_init(uint32_t cap) {
     g_sys.tick_ms = 50;
     g_sys.snapshot_period = 2000;
     
-    // Initialize continuous dynamics parameters
-    g_sys.lambda_decay = 0.99f;
-    g_sys.lambda_e = 0.9f;
-    g_sys.beta_blend = 0.7f;
+    // Parameters now in graph! (g_node_eta_fast, g_node_epsilon, etc.)
+    // Only initialize ones not yet migrated:
     g_sys.gamma_slow = 0.8f;
-    g_sys.eta_fast = 3.0f;
-    g_sys.delta_max = 4.0f;
     g_sys.alpha_fast_decay = 0.95f;
     g_sys.alpha_slow_decay = 0.999f;
     
@@ -2004,8 +2008,7 @@ void macro_init(uint32_t cap) {
     g_sys.density_ref = 0.6f;
     g_sys.layer_min_size = 10;
     
-    // Initialize adaptive parameters
-    g_sys.sigmoid_k = 0.5f;
+    // Initialize adaptive parameters (not yet in graph)
     g_sys.prune_rate = 0.0005f;
     g_sys.create_rate = 0.01f;
     g_sys.layer_rate = 0.001f;
@@ -2014,9 +2017,6 @@ void macro_init(uint32_t cap) {
     g_sys.epsilon_min = 0.05f;
     g_sys.epsilon_max = 0.3f;
     g_sys.activation_scale = 64.0f;
-    
-    g_sys.epsilon = 0.5f * (g_sys.epsilon_min + g_sys.epsilon_max); // start in middle
-    g_sys.energy = 0.0f; // start with zero energy
     
     // Initialize homeostatic measurements
     g_sys.current_density = 0.0f;
@@ -2380,11 +2380,14 @@ void observe_and_update() {
     float total_surprise = 0.0f;
     uint32_t edge_count_active = 0;
     
-    // Update global baseline counts (continuous)
+    // Update global baseline counts (continuous) - READ FROM GRAPH!
+    float lambda_decay = (g_node_lambda_decay != UINT32_MAX) ?
+        node_memory_value(&g_graph.nodes[g_node_lambda_decay]) : 0.99f;
+    
     for (uint32_t i = 0; i < g_graph.node_count; i++) {
         Node *n = &g_graph.nodes[i];
-        g_sys.P1[i] *= g_sys.lambda_decay;
-        g_sys.P0[i] *= g_sys.lambda_decay;
+        g_sys.P1[i] *= lambda_decay;
+        g_sys.P0[i] *= lambda_decay;
         
         // Continuous accumulation weighted by activation
         g_sys.P1[i] += n->a;
@@ -2420,8 +2423,8 @@ void observe_and_update() {
         float d_ij = node_a_prev(src) * (a_j_next - hat_j);
         
         // Update predictive lift counters (continuous)
-        edge_C11(e) *= g_sys.lambda_decay;
-        edge_C10(e) *= g_sys.lambda_decay;
+        edge_C11(e) *= lambda_decay;
+        edge_C10(e) *= lambda_decay;
         
         // Continuous accumulation weighted by activation
         edge_C11(e) += node_a_prev(src) * a_j_next;
@@ -2434,7 +2437,10 @@ void observe_and_update() {
         
         float e_ij = d_ij * surprise;
         
-        float U_ij = g_sys.beta_blend * u_ij + (1.0f - g_sys.beta_blend) * e_ij;
+        // READ BETA_BLEND FROM GRAPH!
+        float beta_blend = (g_node_beta_blend != UINT32_MAX) ?
+            node_memory_value(&g_graph.nodes[g_node_beta_blend]) : 0.7f;
+        float U_ij = beta_blend * u_ij + (1.0f - beta_blend) * e_ij;
         
         // Update average usefulness for slow track
         edge_avg_U(e) = 0.95f * edge_avg_U(e) + 0.05f * U_ij;
@@ -2448,8 +2454,11 @@ void observe_and_update() {
         float eta_fast = (g_node_eta_fast != UINT32_MAX) ?
             node_memory_value(&g_graph.nodes[g_node_eta_fast]) : 3.0f;
         float delta_fast = eta_fast * U_ij * edge_eligibility(e);
-        // Soft clamp using tanh
-        delta_fast = g_sys.delta_max * tanhf(delta_fast / g_sys.delta_max);
+        
+        // Soft clamp using tanh (READ DELTA_MAX FROM GRAPH!)
+        float delta_max = (g_node_delta_max != UINT32_MAX) ?
+            node_memory_value(&g_graph.nodes[g_node_delta_max]) : 4.0f;
+        delta_fast = delta_max * tanhf(delta_fast / delta_max);
         
         float new_w_fast = (float)e->w_fast + delta_fast;
         // Soft clamp to [0, 255]
@@ -2512,47 +2521,8 @@ void observe_and_update() {
 
 // GRAPH-BASED PARAMETER ADAPTATION
 // Most logic now in graph via sensor→controller edges
-void adapt_parameters() {
-    // Update sensor node activations (they control the rest via edges in graph!)
-    float max_possible_edges = (float)(g_graph.node_count * g_graph.node_count);
-    g_sys.current_density = (max_possible_edges > 0) 
-        ? (float)g_graph.edge_count / max_possible_edges 
-        : 0.0f;
-    
-    g_sys.current_activity = (g_graph.node_count > 0)
-        ? (float)g_sys.active_node_count / (float)g_graph.node_count
-        : 0.0f;
-    
-    g_sys.prediction_acc = 1.0f - g_sys.mean_error;
-    
-    // Update sensor nodes with current statistics
-    // These will propagate to META nodes via edges!
-    for (uint32_t i = 0; i < g_graph.node_count && i < 100; i++) {
-        Node *n = &g_graph.nodes[i];
-        if (!node_is_protected(n)) continue;
-        
-        // Update sensor activations based on measured statistics
-        if (node_op_type(n) == OP_COMPARE) {
-            // Identify sensor type by theta value (ID marker)
-            if (node_theta(n) == 0.0f) {
-                // Density sensor - HIGH when graph is too dense
-                n->a = g_sys.current_density * 3.0f; // Amplify signal
-                if (n->a > 1.0f) n->a = 1.0f;
-            } else if (node_theta(n) == 1.0f) {
-                // Activity sensor - HIGH when too many nodes active
-                n->a = g_sys.current_activity * 2.0f;
-                if (n->a > 1.0f) n->a = 1.0f;
-            } else if (node_theta(n) == 2.0f) {
-                // Error sensor - HIGH when predictions are wrong
-                n->a = g_sys.mean_error * 5.0f; // Amplify error signal
-                if (n->a > 1.0f) n->a = 1.0f;
-            }
-        }
-    }
-    
-    // The rest is handled by graph edges!
-    // Sensors → META nodes → graph modifies itself!
-}
+// DELETED: adapt_parameters() - Now handled by g_node_error_sensor in observe_and_update()!
+// Graph nodes control all parameters via edges.
 
 /* ========================================================================
  * FITNESS-BASED CIRCUIT SELECTION
@@ -3772,10 +3742,7 @@ void main_loop() {
         // The real work happens via graph circuits during propagate()!
         // ═══════════════════════════════════════════════════════════════
         
-        // Sensor updates (feed data to graph circuits)
-        if (g_sys.tick % 10 == 0) {
-            adapt_parameters(); // Just updates sensor activations
-        }
+        // Sensor updates now in observe_and_update() via g_node_error_sensor!
         
         // HOT/COLD: Adaptive memory management (graph-controlled)
         migrate_hot_cold();  // Runs every 1000 ticks, adapts based on access patterns
@@ -4002,6 +3969,27 @@ void bootstrap_meta_circuits() {
         g_graph.edges[e_idx].w_fast = 30;
         g_graph.edges[e_idx].w_slow = 30;
     }
+    
+    // PHASE 2: Learning algorithm parameters as graph nodes
+    g_node_beta_blend = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_beta_blend], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_beta_blend]) = 0.7f;  // Predictive vs error balance
+    node_set_protected(&g_graph.nodes[g_node_beta_blend], 1);
+    
+    g_node_delta_max = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_delta_max], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_delta_max]) = 4.0f;  // Max weight change per tick
+    node_set_protected(&g_graph.nodes[g_node_delta_max], 1);
+    
+    g_node_sigmoid_k = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_sigmoid_k], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_sigmoid_k]) = 0.5f;  // Sigmoid steepness
+    node_set_protected(&g_graph.nodes[g_node_sigmoid_k], 1);
+    
+    g_node_lambda_decay = node_create(&g_graph);
+    node_set_op_type(&g_graph.nodes[g_node_lambda_decay], OP_MEMORY);
+    node_memory_value(&g_graph.nodes[g_node_lambda_decay]) = 0.99f;  // Count decay rate
+    node_set_protected(&g_graph.nodes[g_node_lambda_decay], 1);
     
     // 5 Hebbian samplers - create edges between co-active nodes
     for (int i = 0; i < 5; i++) {
