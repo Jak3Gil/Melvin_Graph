@@ -1143,12 +1143,14 @@ void emit_output() {
     uint8_t output_buffer[1024];
     uint32_t output_len = 0;
     
-    // Output based on GENERALIZATION only!
-    // NOT prediction, NOT activation strength, NOT connection weights
-    // ONLY: Which patterns are most reusable across contexts?
+    // Output by FOLLOWING THE RULES (graph structure)!
+    // NOT prediction, NOT generalization
+    // The connections ARE the rules/patterns learned from data
+    // Output = execute the rules (follow strongest connections)
+    
     typedef struct {
         uint32_t node_id;
-        float score;  // Generalization score
+        float score;  // Rule strength score
     } TokenCandidate;
     
     TokenCandidate candidates[256];
@@ -1162,32 +1164,45 @@ void emit_output() {
         if (node->energy <= output_cost) continue;
         if (node->token_len == 0) continue;
         
-        // GENERALIZATION SCORE (NOT prediction!)
-        // How many different contexts has this pattern been used in?
-        // = out_degree (number of different things it connects to)
-        // = frequency (how many times it's been reused)
+        // RULE-BASED SCORE
+        // Score = how strongly the CURRENT ACTIVE NODES point to this one
+        // (What do the rules say should happen?)
         
-        float generalization = 0.0f;
+        float rule_score = 0.0f;
         
-        // Factor 1: REUSE FREQUENCY (70%)
-        // How often has this pattern been applied?
-        generalization += (float)node->frequency * 7.0f;
+        // Sum up incoming connection strengths from active nodes
+        for (uint32_t c = 0; c < g_graph.connection_count; c++) {
+            Connection *conn = &g_graph.connections[c];
+            
+            // Does this connection point to this node?
+            if (conn->dst != i) continue;
+            
+            // Is the source node active?
+            if (conn->src >= g_graph.node_count) continue;
+            Node *src = &g_graph.nodes[conn->src];
+            if (src->state < 0.1f) continue;
+            
+            // Add weighted rule strength
+            // = source activation × connection weight
+            // (Strong rule from active source = high score)
+            rule_score += src->state * conn->weight;
+        }
         
-        // Factor 2: CONTEXT DIVERSITY (30%)  
-        // How many different contexts (connections)?
-        generalization += (float)node->out_degree * 3.0f;
+        // If no incoming rules, use node's own activation
+        if (rule_score < 0.1f) {
+            rule_score = node->state;
+        }
         
         candidates[candidate_count].node_id = i;
-        candidates[candidate_count].score = generalization;
+        candidates[candidate_count].score = rule_score;
         candidate_count++;
         
-        if (g_debug && node->state > 0.5f) {
-            fprintf(stderr, "[CANDIDATE] Node %u: ", i);
+        if (g_debug && rule_score > 0.5f) {
+            fprintf(stderr, "[RULE] Node %u: ", i);
             for (uint8_t b = 0; b < node->token_len && b < 10; b++) {
                 fprintf(stderr, "%c", node->token[b]);
             }
-            fprintf(stderr, " gen=%.1f (freq=%u, out_degree=%u)\n",
-                    generalization, node->frequency, node->out_degree);
+            fprintf(stderr, " rule_score=%.2f\n", rule_score);
         }
     }
     
@@ -1203,14 +1218,14 @@ void emit_output() {
     }
     
     if (g_debug && candidate_count > 0) {
-        fprintf(stderr, "[OUTPUT] Top 3 most general patterns:\n");
+        fprintf(stderr, "[OUTPUT] Following rules (strongest connections):\n");
         for (uint32_t i = 0; i < candidate_count && i < 3; i++) {
             Node *n = &g_graph.nodes[candidates[i].node_id];
             fprintf(stderr, "  %u. ", i+1);
             for (uint8_t b = 0; b < n->token_len && b < 10; b++) {
                 fprintf(stderr, "%c", n->token[b]);
             }
-            fprintf(stderr, " (score=%.1f)\n", candidates[i].score);
+            fprintf(stderr, " (rule_strength=%.2f)\n", candidates[i].score);
         }
     }
     
