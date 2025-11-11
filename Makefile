@@ -15,12 +15,16 @@ melvin_core: melvin_core.c
 inspect_program: inspect_program.c
 	$(CC) $(CFLAGS) -o inspect_program inspect_program.c $(LDFLAGS)
 
+# Emergence system - Pure brain-like learning (information in connections)
+melvin_emergence: melvin_emergence.c
+	$(CC) $(CFLAGS) -o melvin_emergence melvin_emergence.c $(LDFLAGS)
+
 # Optional: Minimal VM (separate lightweight implementation)
 melvin_vm: melvin_vm.c
 	$(CC) $(CFLAGS) -o melvin_vm melvin_vm.c $(LDFLAGS)
 
 clean:
-	rm -f melvin_vm melvin_core inspect_program graph.mmap nodes.bin edges.bin
+	rm -f melvin_vm melvin_core melvin_emergence inspect_program graph.mmap graph_emergence.mmap nodes.bin edges.bin
 
 run: melvin_core
 	./melvin_core
