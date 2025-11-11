@@ -710,113 +710,120 @@ void sense_input(const uint8_t *bytes, uint32_t len) {
     g_graph.activation_sequence_counter = 0;
     g_graph.activation_log_len = 0;
     
-    // VARIABLE-LENGTH TOKENS: Create nodes for ALL n-grams (1 to 10 bytes)
-    for (uint32_t start = 0; start < len; start++) {
-        // Skip newlines for tokenization
-        if (bytes[start] == '\n' || bytes[start] == '\r') {
-            g_graph.recent_active_count = 0;
-            continue;
-        }
+    // TOKENIZE INTO WORDS: Find word boundaries first, then create tokens
+    uint32_t word_starts[128];
+    uint32_t word_lens[128];
+    uint32_t word_count = 0;
+    
+    uint32_t word_start = 0;
+    int in_word = 0;
+    
+    for (uint32_t i = 0; i <= len && word_count < 128; i++) {
+        uint8_t ch = (i < len) ? bytes[i] : ' ';  // Treat end as space
+        int is_boundary = (ch == ' ' || ch == '\n' || ch == '\r');
         
-        // Try different n-gram lengths
-        for (uint32_t ngram_len = 1; ngram_len <= 10 && start + ngram_len <= len; ngram_len++) {
-            // Skip if would include newline
-            int has_newline = 0;
-            for (uint32_t check = 0; check < ngram_len; check++) {
-                if (bytes[start + check] == '\n' || bytes[start + check] == '\r') {
-                    has_newline = 1;
-                    break;
-                }
+        if (!in_word && !is_boundary) {
+            // Start of new word
+            word_start = i;
+            in_word = 1;
+        } else if (in_word && is_boundary) {
+            // End of word
+            word_starts[word_count] = word_start;
+            word_lens[word_count] = i - word_start;
+            word_count++;
+            in_word = 0;
+            
+            if (ch == '\n' || ch == '\r') {
+                g_graph.recent_active_count = 0;  // Reset on newlines
             }
-            if (has_newline) break;
-            
-            // Find if this n-gram already has a node
-            uint32_t node_id = UINT32_MAX;
-            
-            for (uint32_t n = 21; n < g_graph.node_count; n++) {
-                Node *node = &g_graph.nodes[n];
+        }
+    }
+    
+    // Now create tokens for each word (all n-grams within each word)
+    for (uint32_t w = 0; w < word_count; w++) {
+        uint32_t start = word_starts[w];
+        uint32_t word_len = word_lens[w];
+        uint32_t longest_node = UINT32_MAX;
+        
+        // Create all n-grams for this word
+        for (uint32_t ngram_len = 1; ngram_len <= word_len && ngram_len <= 10; ngram_len++) {
+            for (uint32_t offset = 0; offset + ngram_len <= word_len; offset++) {
+                uint32_t pos = start + offset;
                 
-                // Does this node's token match our n-gram?
-                if (node->token_len == ngram_len) {
-                    int match = 1;
-                    for (uint32_t b = 0; b < ngram_len; b++) {
-                        if (node->token[b] != bytes[start + b]) {
-                            match = 0;
+                // Find if this n-gram already has a node
+                uint32_t node_id = UINT32_MAX;
+                
+                for (uint32_t n = 21; n < g_graph.node_count; n++) {
+                    Node *node = &g_graph.nodes[n];
+                    
+                    // Does this node's token match our n-gram?
+                    if (node->token_len == ngram_len) {
+                        int match = 1;
+                        for (uint32_t b = 0; b < ngram_len; b++) {
+                            if (node->token[b] != bytes[pos + b]) {
+                                match = 0;
+                                break;
+                            }
+                        }
+                        
+                        if (match) {
+                            node_id = n;
                             break;
                         }
                     }
-                    
-                    if (match) {
-                        node_id = n;
-                        break;
-                    }
                 }
-            }
-            
-            // N-gram doesn't exist - CREATE IT!
-            if (node_id == UINT32_MAX) {
-                node_id = node_create();
                 
+                // N-gram doesn't exist - CREATE IT!
                 if (node_id == UINT32_MAX) {
-                    fprintf(stderr, "[ERROR] Failed to create node for ngram_len=%u\n", ngram_len);
-                    continue;
-                }
-                
-                Node *new_node = &g_graph.nodes[node_id];
-                new_node->token_len = ngram_len;
-                for (uint32_t b = 0; b < ngram_len; b++) {
-                    new_node->token[b] = bytes[start + b];
-                }
-                new_node->frequency = 1;
-                
-                if (g_debug) {
-                    fprintf(stderr, "[CREATE] Node %u for token \"", node_id);
+                    node_id = node_create();
+                    if (node_id == UINT32_MAX) continue;
+                    
+                    Node *new_node = &g_graph.nodes[node_id];
+                    new_node->token_len = ngram_len;
                     for (uint32_t b = 0; b < ngram_len; b++) {
-                        uint8_t ch = new_node->token[b];
-                        fprintf(stderr, "%c", (ch >= 32 && ch < 127) ? ch : '?');
+                        new_node->token[b] = bytes[pos + b];
                     }
-                    fprintf(stderr, "\" (%u bytes, freq=%u)\n", ngram_len, new_node->frequency);
+                    new_node->frequency = 1;
+                    
+                    if (g_debug) {
+                        fprintf(stderr, "[CREATE] ");
+                        for (uint32_t b = 0; b < ngram_len; b++) {
+                            fprintf(stderr, "%c", new_node->token[b]);
+                        }
+                        fprintf(stderr, " (%u)\n", node_id);
+                    }
+                } else {
+                    g_graph.nodes[node_id].frequency++;
                 }
-            } else {
-                // Token exists - strengthen it!
-                g_graph.nodes[node_id].frequency++;
+                
+                // Track longest token for this word
+                if (offset == 0 && ngram_len == word_len) {
+                    longest_node = node_id;
+                }
+                
+                // Activate all n-grams
+                g_graph.nodes[node_id].state = (float)ngram_len;
+                g_graph.nodes[node_id].energy += input_energy * ngram_len;
+                g_graph.nodes[node_id].last_active_tick = g_graph.tick;
             }
+        }
         
-            if (node_id == UINT32_MAX) continue;
-            
-            Node *node = &g_graph.nodes[node_id];
-            
-            // Activate node (longer tokens = stronger activation!)
-            float activation_strength = (float)ngram_len;
-            node->state = activation_strength;
-            node->energy += input_energy * ngram_len;  // More energy for longer tokens!
-            node->last_active_tick = g_graph.tick;
-            node->activation_sequence = g_graph.activation_sequence_counter;
-            
-            // LOG THIS ACTIVATION (for output)
-            if (g_graph.activation_log_len < 1024) {
-                g_graph.activation_log[g_graph.activation_log_len].node_id = node_id;
-                g_graph.activation_log[g_graph.activation_log_len].sequence = g_graph.activation_sequence_counter;
-                g_graph.activation_log[g_graph.activation_log_len].byte = node->token[0];  // Store first byte
-                g_graph.activation_log_len++;
-            }
-            
-            g_graph.activation_sequence_counter++;
-            
-            // SEQUENTIAL WIRING: Connect to previous token
-            if (g_graph.recent_active_count > 0) {
-                uint32_t prev_id = g_graph.recent_active[(g_graph.recent_active_count - 1) % 10];
-                if (prev_id != node_id && prev_id < g_graph.node_count) {
-                    connection_create_guarded(prev_id, node_id, 1.0f);
+        // Connect ONLY the longest token (full word) to previous word
+        if (longest_node != UINT32_MAX && g_graph.recent_active_count > 0) {
+            uint32_t prev_id = g_graph.recent_active[(g_graph.recent_active_count - 1) % 10];
+            if (prev_id != longest_node && prev_id < g_graph.node_count) {
+                uint32_t conn_id = connection_create(prev_id, longest_node, 1.0f);
+                if (g_debug && conn_id != UINT32_MAX) {
+                    fprintf(stderr, "[CONNECT] %u → %u\n", prev_id, longest_node);
                 }
             }
-            
-            // Add to recent (only for longest n-grams to avoid redundancy)
-            if (ngram_len >= 3 || start + ngram_len == len) {
-                g_graph.recent_active[g_graph.recent_active_count % 10] = node_id;
-                if (g_graph.recent_active_count < 10) {
-                    g_graph.recent_active_count++;
-                }
+        }
+        
+        // Add longest token to recent
+        if (longest_node != UINT32_MAX) {
+            g_graph.recent_active[g_graph.recent_active_count % 10] = longest_node;
+            if (g_graph.recent_active_count < 10) {
+                g_graph.recent_active_count++;
             }
         }
     }
