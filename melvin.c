@@ -315,30 +315,40 @@ void execute_rules() {
         }
     }
     
-    // MULTI-HOP: Execute rules multiple times for chaining!
+    // MULTI-HOP with DECAY: Distant activations are weaker!
     for (int hop = 0; hop < 5; hop++) {
+        float activation_strength = 1.0f - (hop * 0.2f);  // 1.0, 0.8, 0.6, 0.4, 0.2
+        if (activation_strength <= 0.0f) break;
+        
         int any_fired = 0;
         
         for (uint32_t i = 0; i < g.node_count; i++) {
             Node *rule = &g.nodes[i];
             if (rule->type != NODE_RULE) continue;
             
-            // Check if all inputs are active
+            // Check if all inputs are active with sufficient strength
             int all_active = 1;
+            float min_input_state = 1.0f;
             for (uint8_t j = 0; j < rule->rule_input_count; j++) {
                 uint32_t inp_id = rule->rule_inputs[j];
-                if (inp_id >= g.node_count || g.nodes[inp_id].state < 0.5f) {
+                if (inp_id >= g.node_count || g.nodes[inp_id].state < 0.3f) {
                     all_active = 0;
                     break;
+                }
+                if (g.nodes[inp_id].state < min_input_state) {
+                    min_input_state = g.nodes[inp_id].state;
                 }
             }
             
             if (all_active) {
-                // Fire rule: Activate outputs
+                // Fire rule: Activate outputs with STRONG DECAY
+                float output_strength = min_input_state * 0.7f;  // 30% decay each hop!
+                if (output_strength < 0.4f) continue;  // Higher threshold = less noise
+                
                 for (uint8_t j = 0; j < rule->rule_output_count; j++) {
                     uint32_t out_id = rule->rule_outputs[j];
-                    if (out_id < g.node_count && g.nodes[out_id].state < 0.5f) {
-                        g.nodes[out_id].state = 0.8f;
+                    if (out_id < g.node_count && g.nodes[out_id].state < output_strength) {
+                        g.nodes[out_id].state = output_strength;
                         any_fired = 1;
                     }
                 }
@@ -367,10 +377,10 @@ void emit_output() {
     uint8_t output[1024];
     uint32_t output_len = 0;
     
-    // Output only nodes activated BY rules (not input echo)
+    // Output only nodes activated BY rules with sufficient strength
     for (uint32_t i = 0; i < g.node_count; i++) {
         if (g.nodes[i].type != NODE_DATA) continue;
-        if (g.nodes[i].state == 0.0f) continue;  // Skip inactive (no threshold!)
+        if (g.nodes[i].state < 0.4f) continue;  // Higher threshold = cleaner output
         if (from_input[i]) continue;  // Skip input nodes
         
         
