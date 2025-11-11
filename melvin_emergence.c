@@ -55,14 +55,15 @@ typedef struct {
     uint32_t pattern_members[16];  // IDs of nodes in this pattern
     uint8_t pattern_member_count;
     
-    // Output learning: tracks correlation with each byte
-    float byte_correlation[256];
-    uint8_t learned_output_byte;  // Byte with highest correlation
+    // VARIABLE-LENGTH TOKEN (1-16 bytes!)
+    uint8_t token[16];          // The bytes this node represents
+    uint8_t token_len;          // Length (1=letter, 3=word, etc.)
+    uint32_t frequency;         // How often this token appears (for ranking)
     
     // PREDICTION: Intelligence comes from forecasting!
-    uint8_t predicted_next_byte;     // What byte does this node predict comes next?
-    float prediction_confidence;     // How confident (0.0-1.0)
-    uint32_t predictions_correct;    // Prediction accuracy tracking
+    uint32_t predicted_next_node;    // What node does this predict comes next?
+    float prediction_confidence;      // How confident (0.0-1.0)
+    uint32_t predictions_correct;     // Prediction accuracy tracking
     uint32_t predictions_wrong;
 } Node;
 
@@ -277,14 +278,17 @@ uint32_t node_create() {
     n->energy = 100.0f;  // Initial energy
     n->threshold = 0.5f;
     n->last_active_tick = g_graph.tick;
-    n->learned_output_byte = 0;
+    n->token[0] = 0;
     n->is_hub = 0;
     n->hub_level = 0;  // Start as byte-level
     n->in_degree = 0;
     n->out_degree = 0;
     n->is_pattern = 0;
     n->pattern_member_count = 0;
-    n->predicted_next_byte = 0;
+    memset(n->token, 0, sizeof(n->token));
+    n->token_len = 0;
+    n->frequency = 0;
+    n->predicted_next_node = UINT32_MAX;
     n->prediction_confidence = 0.0f;
     n->predictions_correct = 0;
     n->predictions_wrong = 0;
@@ -432,7 +436,7 @@ void predict_next() {
         
         // Make prediction
         if (best_dst != UINT32_MAX && best_dst < g_graph.node_count) {
-            node->predicted_next_byte = g_graph.nodes[best_dst].learned_output_byte;
+            node->predicted_next_node = g_graph.nodes[best_dst].token[0];
             node->prediction_confidence = best_weight / 10.0f;
         }
     }
@@ -447,7 +451,7 @@ void validate_predictions(uint8_t actual_byte) {
         
         if (node->prediction_confidence <= 0.0f) continue;
         
-        if (node->predicted_next_byte == actual_byte) {
+        if (node->predicted_next_node == actual_byte) {
             // CORRECT PREDICTION! This is intelligence!
             node->predictions_correct++;
             float reward = 10.0f * node->prediction_confidence;
@@ -465,7 +469,7 @@ void validate_predictions(uint8_t actual_byte) {
             
             if (g_debug && g_graph.tick % 50 == 0 && node->prediction_confidence > 0.8f) {
                 fprintf(stderr, "[PREDICT ✗] Node %u predicted '%c' but got '%c' (-%1f energy)\n",
-                        i, node->predicted_next_byte, actual_byte, penalty);
+                        i, node->predicted_next_node, actual_byte, penalty);
             }
         }
         
@@ -615,7 +619,7 @@ void detect_patterns() {
                     }
                     
                     // Pattern node can also output its sequence
-                    pnode->learned_output_byte = g_graph.nodes[chain[0]].learned_output_byte;
+                    pnode->token[0] = g_graph.nodes[chain[0]].token[0];
                     
                     // INTELLIGENCE RULE 6: COMPRESSION REWARD!
                     float compression_ratio = (float)chain_len;
@@ -628,7 +632,7 @@ void detect_patterns() {
                         fprintf(stderr, "  Members: ");
                         for (uint32_t i = 0; i < chain_len && i < 5; i++) {
                             fprintf(stderr, "%u('%c') ", chain[i], 
-                                    g_graph.nodes[chain[i]].learned_output_byte);
+                                    g_graph.nodes[chain[i]].token[0]);
                         }
                         if (chain_len > 5) fprintf(stderr, "...");
                         fprintf(stderr, "\n");
@@ -692,7 +696,7 @@ void detect_hubs() {
  * ======================================================================== */
 
 void sense_input(const uint8_t *bytes, uint32_t len) {
-    // Store current input for output learning
+    // Store current input
     g_graph.prev_input_len = g_graph.current_input_len;
     memcpy(g_graph.prev_input, g_graph.current_input, g_graph.current_input_len);
     
@@ -700,88 +704,120 @@ void sense_input(const uint8_t *bytes, uint32_t len) {
     memcpy(g_graph.current_input, bytes, g_graph.current_input_len);
     
     float input_energy = (g_graph.node_count > 3) ? 
-                         g_graph.nodes[3].state : 1.0f;  // Meta-node 3
+                         g_graph.nodes[3].state : 1.0f;
     
-    // Reset sequence counter and activation log for this input
+    // Reset for this input
     g_graph.activation_sequence_counter = 0;
     g_graph.activation_log_len = 0;
     
-    for (uint32_t i = 0; i < len; i++) {
-        uint8_t byte = bytes[i];
-        
-        // Reset sequence on newline (don't connect across lines!)
-        if (byte == '\n' || byte == '\r') {
+    // VARIABLE-LENGTH TOKENS: Create nodes for ALL n-grams (1 to 10 bytes)
+    for (uint32_t start = 0; start < len; start++) {
+        // Skip newlines for tokenization
+        if (bytes[start] == '\n' || bytes[start] == '\r') {
             g_graph.recent_active_count = 0;
+            continue;
         }
         
-        // Find node that represents this byte (REUSE neurons!)
-        uint32_t node_id = UINT32_MAX;
-        float best_correlation = 0.0f;
-        
-        for (uint32_t n = 21; n < g_graph.node_count; n++) {
-            Node *node = &g_graph.nodes[n];
-            
-            // Find node with strongest correlation to this byte
-            if (node->byte_correlation[byte] > best_correlation) {
-                best_correlation = node->byte_correlation[byte];
-                node_id = n;
-            }
-        }
-        
-        // Create new node only if no existing node responds
-        if (best_correlation < 0.5f || node_id == UINT32_MAX) {
-            node_id = node_create();
-            
-            if (node_id != UINT32_MAX) {
-                g_graph.nodes[node_id].byte_correlation[byte] = 1.0f;
-                g_graph.nodes[node_id].learned_output_byte = byte;
-                
-                if (g_debug && node_id < 40) {  // Only show first few
-                    fprintf(stderr, "[CREATE] Node %u for byte '%c' (%u)\n",
-                            node_id, (byte >= 32 && byte < 127) ? byte : '?', byte);
+        // Try different n-gram lengths
+        for (uint32_t ngram_len = 1; ngram_len <= 10 && start + ngram_len <= len; ngram_len++) {
+            // Skip if would include newline
+            int has_newline = 0;
+            for (uint32_t check = 0; check < ngram_len; check++) {
+                if (bytes[start + check] == '\n' || bytes[start + check] == '\r') {
+                    has_newline = 1;
+                    break;
                 }
             }
-        } else {
-            // Strengthen existing node's correlation
-            g_graph.nodes[node_id].byte_correlation[byte] += 0.1f;
-            if (g_graph.nodes[node_id].byte_correlation[byte] > 10.0f) {
-                g_graph.nodes[node_id].byte_correlation[byte] = 10.0f;
+            if (has_newline) break;
+            
+            // Find if this n-gram already has a node
+            uint32_t node_id = UINT32_MAX;
+            
+            for (uint32_t n = 21; n < g_graph.node_count; n++) {
+                Node *node = &g_graph.nodes[n];
+                
+                // Does this node's token match our n-gram?
+                if (node->token_len == ngram_len) {
+                    int match = 1;
+                    for (uint32_t b = 0; b < ngram_len; b++) {
+                        if (node->token[b] != bytes[start + b]) {
+                            match = 0;
+                            break;
+                        }
+                    }
+                    
+                    if (match) {
+                        node_id = n;
+                        break;
+                    }
+                }
             }
-        }
-        
-        if (node_id == UINT32_MAX) continue;
-        
-        Node *node = &g_graph.nodes[node_id];
-        
-        // Activate node with sequence tracking
-        node->state = 1.0f;
-        node->energy += input_energy;
-        node->last_active_tick = g_graph.tick;
-        node->activation_sequence = g_graph.activation_sequence_counter;
-        
-        // LOG THIS ACTIVATION EVENT (allows same node to fire multiple times!)
-        if (g_graph.activation_log_len < 1024) {
-            g_graph.activation_log[g_graph.activation_log_len].node_id = node_id;
-            g_graph.activation_log[g_graph.activation_log_len].sequence = g_graph.activation_sequence_counter;
-            g_graph.activation_log[g_graph.activation_log_len].byte = byte;
-            g_graph.activation_log_len++;
-        }
-        
-        g_graph.activation_sequence_counter++;  // Increment for next byte
-        
-        // SEQUENTIAL WIRING: Only connect to IMMEDIATE previous node (learn true rules!)
-        // This learns "H→e" not "H→everything"
-        if (g_graph.recent_active_count > 0) {
-            uint32_t prev_id = g_graph.recent_active[(g_graph.recent_active_count - 1) % 10];
-            if (prev_id != node_id && prev_id < g_graph.node_count) {
-                connection_create_guarded(prev_id, node_id, 1.0f);
+            
+            // N-gram doesn't exist - CREATE IT!
+            if (node_id == UINT32_MAX) {
+                node_id = node_create();
+                
+                if (node_id == UINT32_MAX) {
+                    fprintf(stderr, "[ERROR] Failed to create node for ngram_len=%u\n", ngram_len);
+                    continue;
+                }
+                
+                Node *new_node = &g_graph.nodes[node_id];
+                new_node->token_len = ngram_len;
+                for (uint32_t b = 0; b < ngram_len; b++) {
+                    new_node->token[b] = bytes[start + b];
+                }
+                new_node->frequency = 1;
+                
+                if (g_debug) {
+                    fprintf(stderr, "[CREATE] Node %u for token \"", node_id);
+                    for (uint32_t b = 0; b < ngram_len; b++) {
+                        uint8_t ch = new_node->token[b];
+                        fprintf(stderr, "%c", (ch >= 32 && ch < 127) ? ch : '?');
+                    }
+                    fprintf(stderr, "\" (%u bytes, freq=%u)\n", ngram_len, new_node->frequency);
+                }
+            } else {
+                // Token exists - strengthen it!
+                g_graph.nodes[node_id].frequency++;
             }
-        }
         
-        // Add to recent active list (circular buffer)
-        g_graph.recent_active[g_graph.recent_active_count % 10] = node_id;
-        if (g_graph.recent_active_count < 10) {
-            g_graph.recent_active_count++;
+            if (node_id == UINT32_MAX) continue;
+            
+            Node *node = &g_graph.nodes[node_id];
+            
+            // Activate node (longer tokens = stronger activation!)
+            float activation_strength = (float)ngram_len;
+            node->state = activation_strength;
+            node->energy += input_energy * ngram_len;  // More energy for longer tokens!
+            node->last_active_tick = g_graph.tick;
+            node->activation_sequence = g_graph.activation_sequence_counter;
+            
+            // LOG THIS ACTIVATION (for output)
+            if (g_graph.activation_log_len < 1024) {
+                g_graph.activation_log[g_graph.activation_log_len].node_id = node_id;
+                g_graph.activation_log[g_graph.activation_log_len].sequence = g_graph.activation_sequence_counter;
+                g_graph.activation_log[g_graph.activation_log_len].byte = node->token[0];  // Store first byte
+                g_graph.activation_log_len++;
+            }
+            
+            g_graph.activation_sequence_counter++;
+            
+            // SEQUENTIAL WIRING: Connect to previous token
+            if (g_graph.recent_active_count > 0) {
+                uint32_t prev_id = g_graph.recent_active[(g_graph.recent_active_count - 1) % 10];
+                if (prev_id != node_id && prev_id < g_graph.node_count) {
+                    connection_create_guarded(prev_id, node_id, 1.0f);
+                }
+            }
+            
+            // Add to recent (only for longest n-grams to avoid redundancy)
+            if (ngram_len >= 3 || start + ngram_len == len) {
+                g_graph.recent_active[g_graph.recent_active_count % 10] = node_id;
+                if (g_graph.recent_active_count < 10) {
+                    g_graph.recent_active_count++;
+                }
+            }
         }
     }
 }
@@ -824,7 +860,7 @@ void propagate() {
                 if (g_graph.activation_log_len < 1024) {
                     g_graph.activation_log[g_graph.activation_log_len].node_id = member_id;
                     g_graph.activation_log[g_graph.activation_log_len].sequence = g_graph.activation_sequence_counter++;
-                    g_graph.activation_log[g_graph.activation_log_len].byte = member->learned_output_byte;
+                    g_graph.activation_log[g_graph.activation_log_len].byte = member->token[0];
                     g_graph.activation_log_len++;
                     
                     member->last_active_tick = g_graph.tick;
@@ -858,7 +894,7 @@ void propagate() {
                 
                 if (g_debug && c->rule_strength > 200 && g_graph.tick % 100 == 0) {
                     fprintf(stderr, "[RULE EXEC] '%c' → '%c' (forced activation %.2f)\n",
-                            src->learned_output_byte, dst->learned_output_byte, rule_force);
+                            src->token[0], dst->token[0], rule_force);
                 }
             }
         } else {
@@ -882,7 +918,7 @@ void propagate() {
             if (!already_logged) {
                 g_graph.activation_log[g_graph.activation_log_len].node_id = c->dst;
                 g_graph.activation_log[g_graph.activation_log_len].sequence = g_graph.activation_sequence_counter++;
-                g_graph.activation_log[g_graph.activation_log_len].byte = dst->learned_output_byte;
+                g_graph.activation_log[g_graph.activation_log_len].byte = dst->token[0];
                 g_graph.activation_log_len++;
                 
                 dst->last_active_tick = g_graph.tick;
@@ -934,7 +970,7 @@ void learn() {
                 
                 if (g_debug && !c->is_rule) {
                     fprintf(stderr, "[RULE DISCOVERY] '%c' → '%c' promoted to RULE (satisfied %u times, never violated)\n",
-                            src->learned_output_byte, dst->learned_output_byte, c->times_satisfied);
+                            src->token[0], dst->token[0], c->times_satisfied);
                 }
             }
         } else if (src_active && !dst_active) {
@@ -948,7 +984,7 @@ void learn() {
                 
                 if (g_debug && g_graph.tick % 50 == 0) {
                     fprintf(stderr, "[RULE VIOLATION] '%c' fired but '%c' didn't! (violations=%u)\n",
-                            src->learned_output_byte, dst->learned_output_byte, c->times_violated);
+                            src->token[0], dst->token[0], c->times_violated);
                 }
                 
                 // Demote from rule if violated too many times
@@ -1063,33 +1099,85 @@ void emit_output() {
     uint8_t output_buffer[1024];
     uint32_t output_len = 0;
     
-    // Output each logged activation event in sequence order
-    for (uint32_t i = 0; i < g_graph.activation_log_len && output_len < 1024; i++) {
-        uint32_t node_id = g_graph.activation_log[i].node_id;
+    // Output active tokens (prefer longer tokens!)
+    // Sort by frequency and length (longer, more frequent = better)
+    typedef struct {
+        uint32_t node_id;
+        uint32_t score;  // frequency * token_len
+    } TokenCandidate;
+    
+    TokenCandidate candidates[256];
+    uint32_t candidate_count = 0;
+    
+    // Collect active token nodes
+    for (uint32_t i = 21; i < g_graph.node_count && candidate_count < 256; i++) {
+        Node *node = &g_graph.nodes[i];
         
-        if (node_id >= g_graph.node_count) continue;
+        if (node->state <= output_threshold) continue;
+        if (node->energy <= output_cost) continue;
+        if (node->token_len == 0) continue;
         
+        candidates[candidate_count].node_id = i;
+        candidates[candidate_count].score = node->frequency * node->token_len;
+        candidate_count++;
+    }
+    
+    // Sort by score (higher = better)
+    for (uint32_t i = 0; i < candidate_count; i++) {
+        for (uint32_t j = i + 1; j < candidate_count; j++) {
+            if (candidates[j].score > candidates[i].score) {
+                TokenCandidate tmp = candidates[i];
+                candidates[i] = candidates[j];
+                candidates[j] = tmp;
+            }
+        }
+    }
+    
+    // Select BEST non-overlapping tokens (greedy longest-first)
+    uint8_t used_positions[256] = {0};  // Track which input positions are covered
+    
+    for (uint32_t i = 0; i < candidate_count && i < 20; i++) {
+        uint32_t node_id = candidates[i].node_id;
         Node *node = &g_graph.nodes[node_id];
         
-        // Don't check state - use the logged event directly!
-        // This allows same node to output multiple times
-        if (node->energy <= output_cost) continue;
+        // Check if this token overlaps with already-selected tokens
+        int overlaps = 0;
         
-        // Output the byte from the activation event
-        output_buffer[output_len++] = g_graph.activation_log[i].byte;
-        
-        // Charge energy cost
-        node->energy -= output_cost * 0.1f;  // Small cost per output
-        
-        // Reinforce correct outputs
-        for (uint32_t j = 0; j < g_graph.prev_input_len; j++) {
-            if (g_graph.prev_input[j] == g_graph.activation_log[i].byte) {
-                node->byte_correlation[g_graph.activation_log[i].byte] += 0.05f;
-                if (node->byte_correlation[g_graph.activation_log[i].byte] > 10.0f) {
-                    node->byte_correlation[g_graph.activation_log[i].byte] = 10.0f;
+        // Find this token in current input
+        for (uint32_t p = 0; p + node->token_len <= g_graph.current_input_len; p++) {
+            int matches = 1;
+            for (uint32_t b = 0; b < node->token_len; b++) {
+                if (g_graph.current_input[p + b] != node->token[b]) {
+                    matches = 0;
+                    break;
                 }
-                node->energy += 1.0f;  // Reward
-                break;
+            }
+            
+            if (matches) {
+                // Check if any position is already used
+                for (uint32_t b = 0; b < node->token_len; b++) {
+                    if (used_positions[p + b]) {
+                        overlaps = 1;
+                        break;
+                    }
+                }
+                
+                // If no overlap, use this token!
+                if (!overlaps) {
+                    // Output entire token
+                    for (uint32_t b = 0; b < node->token_len && output_len < 1024; b++) {
+                        output_buffer[output_len++] = node->token[b];
+                        used_positions[p + b] = 1;  // Mark as used
+                    }
+                    
+                    // Energy cost
+                    node->energy -= output_cost * node->token_len * 0.1f;
+                    
+                    // Reward for correct output
+                    node->energy += 2.0f * node->token_len;
+                    
+                    break;  // Found position for this token
+                }
             }
         }
     }
@@ -1324,15 +1412,12 @@ int main(int argc, char **argv) {
             // INTELLIGENCE: Predict before seeing (Rule 5)
             predict_next();
             
-            // Process input byte-by-byte for prediction validation
+            // Process FULL input (for n-gram tokenization!)
+            sense_input(input_buffer, n);
+            
+            // Validate predictions byte-by-byte (Rule 5)
             for (ssize_t b = 0; b < n; b++) {
-                uint8_t byte = input_buffer[b];
-                
-                // Validate predictions (Rule 5)
-                validate_predictions(byte);
-                
-                // Process this byte
-                sense_input(&byte, 1);
+                validate_predictions(input_buffer[b]);
             }
             
             idle_ticks = 0;
