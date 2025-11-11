@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 
 /* MINIMAL NODE - Just data */
 typedef struct {
@@ -336,9 +337,9 @@ int main() {
     }
     
     // Save state
-    uint32_t *header = (uint32_t *)mmap_base;
-    header[0] = g.node_count;
-    header[1] = g.connection_count;
+    uint32_t *hdr = (uint32_t *)mmap_base;
+    hdr[0] = g.node_count;
+    hdr[1] = g.connection_count;
     
     msync(mmap_base, size, MS_SYNC);
     munmap(mmap_base, size);
