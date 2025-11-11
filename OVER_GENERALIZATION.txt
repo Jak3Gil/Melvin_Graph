@@ -1,0 +1,38 @@
+# OVER-GENERALIZATION ISSUE
+
+Test results show system generalizes TOO MUCH:
+
+Training: cat→sat, bat→sat, mat→sat
+
+Expected behavior:
+  'rat' (0.67 similar) → 'sat' ✓ Good!
+  'beans' (0.0 similar) → (nothing) ✓ Should be honest!
+
+Actual behavior:
+  'rat' → 'sat' ✓
+  'beans' → 'sat' ✗ Over-generalizing!
+
+Similarity scores:
+  beans vs cat: 0.00 (no matches)
+  beans vs bat: 0.20 (only 'b')  
+  beans vs mat: 0.00
+  
+Threshold: 0.50
+
+beans < 0.50 for all → should NOT generalize!
+
+HYPOTHESIS:
+Maybe it's:
+1. Finding ANY similarity (even < 0.5)
+2. Defaulting to most common rule
+3. Bug in similarity check
+4. Creating rule from wrong node
+
+Need to trace:
+- Is generalize_rules() being called for 'beans'?
+- Which node is it finding as "similar"?
+- What's the actual similarity score calculated?
+
+This reveals important question:
+Should system have a FALLBACK when no rules match?
+Or should it output nothing (honest about ignorance)?
