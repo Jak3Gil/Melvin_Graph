@@ -97,14 +97,16 @@ void record_position(uint32_t node_id, uint32_t position) {
 
 /* Calculate STRUCTURAL similarity (same nodes in same positions?) */
 float calculate_structural_similarity(uint32_t ctx1, uint32_t ctx2) {
-    // Count how many nodes appear in SAME RELATIVE POSITIONS
     uint32_t shared_positions = 0;
     uint32_t total_positions = 0;
+    
+    if (debug) {
+        printf("    Checking ctx %u vs ctx %u:\n", ctx1, ctx2);
+    }
     
     for (uint32_t i = 0; i < g.node_count; i++) {
         PositionTracker *pt = &g.positions[i];
         
-        // Find positions in context 1
         uint32_t pos1 = UINT32_MAX;
         for (uint32_t o = 0; o < pt->occurrence_count; o++) {
             if (pt->occurrences[o].context_id == ctx1) {
@@ -113,7 +115,6 @@ float calculate_structural_similarity(uint32_t ctx1, uint32_t ctx2) {
             }
         }
         
-        // Find positions in context 2
         uint32_t pos2 = UINT32_MAX;
         for (uint32_t o = 0; o < pt->occurrence_count; o++) {
             if (pt->occurrences[o].context_id == ctx2) {
@@ -122,18 +123,31 @@ float calculate_structural_similarity(uint32_t ctx1, uint32_t ctx2) {
             }
         }
         
-        // If node appears in both contexts
         if (pos1 != UINT32_MAX && pos2 != UINT32_MAX) {
             total_positions++;
-            // If at SAME POSITION → structural match!
             if (pos1 == pos2) {
                 shared_positions++;
+                if (debug) {
+                    Node *n = &g.nodes[i];
+                    printf("      Match at pos %u: '", pos1);
+                    for (uint32_t b = 0; b < n->token_len && b < 5; b++) {
+                        printf("%c", n->token[b]);
+                    }
+                    printf("'\n");
+                }
             }
         }
     }
     
     if (total_positions == 0) return 0.0f;
-    return (float)shared_positions / (float)total_positions;
+    float sim = (float)shared_positions / (float)total_positions;
+    
+    if (debug) {
+        printf("    → %u/%u positions match = %.1f%%\n", 
+               shared_positions, total_positions, sim * 100.0f);
+    }
+    
+    return sim;
 }
 
 /* Process input - tokenize and record positions */
