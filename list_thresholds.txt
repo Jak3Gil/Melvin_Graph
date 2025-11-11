@@ -1,0 +1,28 @@
+THRESHOLDS IN THE SYSTEM:
+
+1. GENERALIZATION:
+   - similarity_threshold = 0.5  ← REMOVED! (now uses best match)
+
+2. INPUT DETECTION:
+   Line 231: if (g.nodes[inp].state < 0.99f) continue;
+   → Only generalizes for FULLY active nodes (state=1.0)
+   
+3. EXECUTION:
+   Line 291: if (g.nodes[i].type == NODE_DATA && g.nodes[i].state > 0.99f)
+   → Only marks fully active nodes as "from_input"
+   
+4. OUTPUT:
+   Line 332: if (g.nodes[i].type == NODE_DATA && g.nodes[i].state > 0.99f)
+   Line 343: if (g.nodes[i].state < 0.5f) continue;
+   → Only outputs nodes with state >= 0.5
+   → Filters input nodes (state > 0.99)
+   
+5. PATTERN DETECTION:
+   Line 376: if (rule->times_executed < 5) continue;
+   → Only creates patterns from frequently-fired rules
+   
+6. ADAPTIVE PARAMETERS:
+   Line 416: if (reuse_ratio < 0.5f)
+   → Adjusts learning rate based on reuse ratio
+
+Which thresholds should we remove?

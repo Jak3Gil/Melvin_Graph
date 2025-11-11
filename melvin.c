@@ -243,36 +243,58 @@ void generalize_rules() {
         
         if (has_rule) continue;
         
-        // Find similar node with rule
+        // Find MOST similar node with rule (NO THRESHOLD!)
+        uint32_t best_match = UINT32_MAX;
+        float best_similarity = -1.0f;
+        
         for (uint32_t sim = 0; sim < g.node_count; sim++) {
             if (g.nodes[sim].type != NODE_DATA) continue;
             if (sim == inp) continue;
             
+            // Check if this node has a rule
+            int has_rule_sim = 0;
+            for (uint32_t r = 0; r < g.node_count; r++) {
+                if (g.nodes[r].type == NODE_RULE && 
+                    g.nodes[r].rule_input_count == 1 &&
+                    g.nodes[r].rule_inputs[0] == sim) {
+                    has_rule_sim = 1;
+                    break;
+                }
+            }
+            
+            if (!has_rule_sim) continue;
+            
             float similarity = token_similarity(&g.nodes[inp], &g.nodes[sim]);
             
-            if (similarity > g.similarity_threshold) {
-                // Find rule for similar node
-                for (uint32_t r = 0; r < g.node_count; r++) {
-                    Node *rule = &g.nodes[r];
-                    if (rule->type != NODE_RULE) continue;
-                    if (rule->rule_input_count != 1) continue;
-                    if (rule->rule_inputs[0] != sim) continue;
-                    
-                    // TRANSFER LEARNING: Create analogous rule!
-                    uint32_t new_inputs[1] = {inp};
-                    uint32_t new_rule = create_rule_node(new_inputs, 1, 
-                                                          rule->rule_outputs, 
-                                                          rule->rule_output_count);
-                    
-                    if (debug) {
-                        fprintf(stderr, "[GENERALIZE] %u ('%.*s') → %u (via %.2f sim to '%.*s')\n", 
-                               inp, g.nodes[inp].token_len, g.nodes[inp].token,
-                               rule->rule_outputs[0], similarity,
-                               g.nodes[sim].token_len, g.nodes[sim].token);
-                    }
-                    
-                    return;
+            if (similarity > best_similarity) {
+                best_similarity = similarity;
+                best_match = sim;
+            }
+        }
+        
+        // Use the BEST match, even if weak!
+        if (best_match != UINT32_MAX) {
+            // Find rule for best match
+            for (uint32_t r = 0; r < g.node_count; r++) {
+                Node *rule = &g.nodes[r];
+                if (rule->type != NODE_RULE) continue;
+                if (rule->rule_input_count != 1) continue;
+                if (rule->rule_inputs[0] != best_match) continue;
+                
+                // TRANSFER LEARNING: Create analogous rule!
+                uint32_t new_inputs[1] = {inp};
+                uint32_t new_rule = create_rule_node(new_inputs, 1, 
+                                                      rule->rule_outputs, 
+                                                      rule->rule_output_count);
+                
+                if (debug) {
+                    fprintf(stderr, "[GENERALIZE] %u ('%.*s') → %u (%.2f sim to '%.*s')\n", 
+                           inp, g.nodes[inp].token_len, g.nodes[inp].token,
+                           rule->rule_outputs[0], best_similarity,
+                           g.nodes[best_match].token_len, g.nodes[best_match].token);
                 }
+                
+                return;
             }
         }
     }
@@ -340,7 +362,7 @@ void emit_output() {
     // Output only nodes activated BY rules (not input echo)
     for (uint32_t i = 0; i < g.node_count; i++) {
         if (g.nodes[i].type != NODE_DATA) continue;
-        if (g.nodes[i].state < 0.5f) continue;
+        if (g.nodes[i].state == 0.0f) continue;  // Skip inactive (no threshold!)
         if (from_input[i]) continue;  // Skip input nodes
         
         
@@ -370,11 +392,11 @@ void detect_patterns() {
         uint8_t cluster_size = 0;
         cluster[cluster_size++] = i;
         
-        // Find nodes frequently activated by rules from this node
+        // Find nodes activated by rules from this node (no frequency threshold!)
         for (uint32_t r = 0; r < g.node_count; r++) {
             Node *rule = &g.nodes[r];
             if (rule->type != NODE_RULE) continue;
-            if (rule->times_executed < 5) continue;
+            if (rule->times_executed < 1) continue;  // Just needs to have fired once
             
             for (uint8_t j = 0; j < rule->rule_input_count; j++) {
                 if (rule->rule_inputs[j] == i && cluster_size < 32) {
