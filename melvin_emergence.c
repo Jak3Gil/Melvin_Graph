@@ -1577,68 +1577,80 @@ float calculate_intelligence_fitness(Node *node) {
 }
 
 void reproduce() {
-    // Every 200 ticks, reward intelligent patterns
+    // RELATIVE SELECTION: Kill bottom 20%, reward top 10%
     if (g_graph.tick % 200 != 0) return;
+    if (g_graph.node_count < 30) return;
     
-    // Find most intelligent nodes (not most frequent!)
+    // Calculate IQ for all active nodes
     typedef struct {
         uint32_t node_id;
         float iq_score;
-    } IntelligentNode;
+    } NodeIQ;
     
-    IntelligentNode top_iq[10];
-    uint32_t top_count = 0;
+    NodeIQ all_nodes[1000];
+    uint32_t active_count = 0;
     
-    for (uint32_t i = 21; i < g_graph.node_count && top_count < 10; i++) {
+    for (uint32_t i = 21; i < g_graph.node_count && active_count < 1000; i++) {
         Node *node = &g_graph.nodes[i];
-        if (node->frequency == 0) continue;  // Skip dead nodes
+        if (node->frequency == 0) continue;
         
-        float iq = calculate_intelligence_fitness(node);
-        
-        // Keep top 10 by IQ
-        if (top_count < 10) {
-            top_iq[top_count].node_id = i;
-            top_iq[top_count].iq_score = iq;
-            top_count++;
-        } else {
-            // Replace worst if this is better
-            uint32_t worst_idx = 0;
-            for (uint32_t j = 1; j < 10; j++) {
-                if (top_iq[j].iq_score < top_iq[worst_idx].iq_score) {
-                    worst_idx = j;
-                }
-            }
-            if (iq > top_iq[worst_idx].iq_score) {
-                top_iq[worst_idx].node_id = i;
-                top_iq[worst_idx].iq_score = iq;
+        all_nodes[active_count].node_id = i;
+        all_nodes[active_count].iq_score = calculate_intelligence_fitness(node);
+        active_count++;
+    }
+    
+    if (active_count < 10) return;
+    
+    // Sort by IQ (bubble sort for simplicity)
+    for (uint32_t i = 0; i < active_count; i++) {
+        for (uint32_t j = i + 1; j < active_count; j++) {
+            if (all_nodes[j].iq_score < all_nodes[i].iq_score) {
+                NodeIQ tmp = all_nodes[i];
+                all_nodes[i] = all_nodes[j];
+                all_nodes[j] = tmp;
             }
         }
     }
     
-    // REWARD intelligent nodes (not just survival!)
-    for (uint32_t i = 0; i < top_count; i++) {
-        Node *smart_node = &g_graph.nodes[top_iq[i].node_id];
+    // Calculate cutoffs
+    uint32_t bottom_20_cutoff = active_count / 5;  // Bottom 20%
+    uint32_t top_10_cutoff = active_count - (active_count / 10);  // Top 10%
+    
+    uint32_t killed = 0;
+    uint32_t rewarded = 0;
+    
+    // BOTTOM 20%: PUNISH (relative losers)
+    for (uint32_t i = 0; i < bottom_20_cutoff && i < active_count; i++) {
+        Node *loser = &g_graph.nodes[all_nodes[i].node_id];
+        loser->energy -= 20.0f;  // Heavy penalty
+        loser->frequency = (loser->frequency > 1) ? loser->frequency - 1 : 0;
+        killed++;
         
-        // IQ REWARD: Energy boost proportional to intelligence
-        smart_node->energy += top_iq[i].iq_score * 2.0f;
+        if (loser->energy < 0.0f) loser->energy = 0.0f;
+    }
+    
+    // TOP 10%: REWARD (relative winners)
+    for (uint32_t i = top_10_cutoff; i < active_count; i++) {
+        Node *winner = &g_graph.nodes[all_nodes[i].node_id];
+        winner->energy += all_nodes[i].iq_score * 2.0f;  // Proportional reward
+        winner->frequency++;  // More important
+        rewarded++;
         
-        // Boost all connections from intelligent nodes
+        // Strengthen connections from winners
         for (uint32_t c = 0; c < g_graph.connection_count; c++) {
-            if (g_graph.connections[c].src == top_iq[i].node_id) {
+            if (g_graph.connections[c].src == all_nodes[i].node_id) {
                 g_graph.connections[c].weight += 0.5f;
                 if (g_graph.connections[c].weight > 10.0f) {
                     g_graph.connections[c].weight = 10.0f;
                 }
             }
         }
-        
-        if (g_debug) {
-            fprintf(stderr, "[INTELLIGENCE] Node %u (IQ=%.1f): \"", 
-                    top_iq[i].node_id, top_iq[i].iq_score);
-            for (uint8_t b = 0; b < smart_node->token_len && b < 10; b++) {
-                fprintf(stderr, "%c", smart_node->token[b]);
-            }
-            fprintf(stderr, "\" +%.1f energy\n", top_iq[i].iq_score * 2.0f);
-        }
+    }
+    
+    if (g_debug) {
+        fprintf(stderr, "[RELATIVE SELECTION] Bottom 20%% (%u punished), Top 10%% (%u rewarded)\n",
+                killed, rewarded);
+        fprintf(stderr, "  IQ range: %.1f (worst) to %.1f (best)\n",
+                all_nodes[0].iq_score, all_nodes[active_count-1].iq_score);
     }
 }
