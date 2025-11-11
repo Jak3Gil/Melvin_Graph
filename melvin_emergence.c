@@ -64,6 +64,16 @@ typedef struct {
     uint32_t src;
     uint32_t dst;
     float weight;  // THE MEMORY! (0.0-10.0)
+    
+    // EDGES ARE RULES!
+    uint8_t is_rule;         // This edge is a RULE (IF src THEN dst)
+    uint8_t rule_strength;   // How strictly to enforce (0-255)
+    uint8_t times_satisfied; // How many times rule held true
+    uint8_t times_violated;  // How many times rule was broken
+    
+    // Execution mode
+    uint8_t is_implication;  // src → dst (IF-THEN)
+    uint8_t is_inhibitory;   // src ⊣ dst (IF-THEN-NOT)
 } Connection;
 
 typedef struct {
@@ -298,6 +308,12 @@ uint32_t connection_create(uint32_t src, uint32_t dst, float initial_weight) {
     c->src = src;
     c->dst = dst;
     c->weight = initial_weight;
+    c->is_rule = 0;
+    c->rule_strength = 0;
+    c->times_satisfied = 0;
+    c->times_violated = 0;
+    c->is_implication = 1;  // Default: src → dst (IF-THEN)
+    c->is_inhibitory = 0;
     
     // Update node degrees
     g_graph.nodes[src].out_degree++;
@@ -534,6 +550,11 @@ void sense_input(const uint8_t *bytes, uint32_t len) {
     for (uint32_t i = 0; i < len; i++) {
         uint8_t byte = bytes[i];
         
+        // Reset sequence on newline (don't connect across lines!)
+        if (byte == '\n' || byte == '\r') {
+            g_graph.recent_active_count = 0;
+        }
+        
         // Find node that represents this byte (REUSE neurons!)
         uint32_t node_id = UINT32_MAX;
         float best_correlation = 0.0f;
@@ -589,11 +610,12 @@ void sense_input(const uint8_t *bytes, uint32_t len) {
         
         g_graph.activation_sequence_counter++;  // Increment for next byte
         
-        // TEMPORAL WIRING: Connect to recently active nodes (with guard rails!)
-        for (uint32_t r = 0; r < g_graph.recent_active_count; r++) {
-            uint32_t recent_id = g_graph.recent_active[r];
-            if (recent_id != node_id && recent_id < g_graph.node_count) {
-                connection_create_guarded(recent_id, node_id, 1.0f);
+        // SEQUENTIAL WIRING: Only connect to IMMEDIATE previous node (learn true rules!)
+        // This learns "H→e" not "H→everything"
+        if (g_graph.recent_active_count > 0) {
+            uint32_t prev_id = g_graph.recent_active[(g_graph.recent_active_count - 1) % 10];
+            if (prev_id != node_id && prev_id < g_graph.node_count) {
+                connection_create_guarded(prev_id, node_id, 1.0f);
             }
         }
         
@@ -652,7 +674,7 @@ void propagate() {
         }
     }
     
-    // Propagate through connections
+    // EXECUTE CONNECTIONS AS RULES!
     for (uint32_t i = 0; i < g_graph.connection_count; i++) {
         Connection *c = &g_graph.connections[i];
         
@@ -665,11 +687,27 @@ void propagate() {
         // Skip inactive nodes
         if (src->state < 0.01f) continue;
         
-        // Weighted transmission (hubs get amplification!)
-        float signal = src->state * c->weight * 0.1f;
-        if (src->is_hub) signal *= 1.5f;  // Hub boost!
+        float signal = 0.0f;
         
-        dst->state += signal;
+        if (c->is_rule) {
+            // RULE MODE: IF src fires, dst MUST fire!
+            if (src->state > src->threshold) {
+                // Execute the rule: FORCE dst to activate
+                float rule_force = (float)c->rule_strength / 255.0f;
+                dst->state = rule_force;  // Direct assignment (enforcement!)
+                signal = rule_force;
+                
+                if (g_debug && c->rule_strength > 200 && g_graph.tick % 100 == 0) {
+                    fprintf(stderr, "[RULE EXEC] '%c' → '%c' (forced activation %.2f)\n",
+                            src->learned_output_byte, dst->learned_output_byte, rule_force);
+                }
+            }
+        } else {
+            // STATISTICAL MODE: Weighted transmission (old behavior)
+            signal = src->state * c->weight * 0.1f;
+            if (src->is_hub) signal *= 1.5f;  // Hub boost!
+            dst->state += signal;
+        }
         
         // If dst crosses threshold, LOG IT (for output!)
         if (dst->state > dst->threshold && g_graph.activation_log_len < 1024) {
@@ -726,6 +764,44 @@ void learn() {
             // Both firing → strengthen connection
             c->weight += learning_rate;
             if (c->weight > 10.0f) c->weight = 10.0f;
+            
+            // Track rule discovery
+            if (c->times_satisfied < 255) c->times_satisfied++;
+            
+            // PROMOTE TO RULE: If consistently satisfied, this becomes LAW!
+            if (c->weight >= 9.5f && c->times_satisfied > 20 && c->times_violated == 0) {
+                c->is_rule = 1;
+                c->rule_strength = (uint8_t)(c->weight * 25.5f);  // Scale to 0-255
+                
+                if (g_debug && !c->is_rule) {
+                    fprintf(stderr, "[RULE DISCOVERY] '%c' → '%c' promoted to RULE (satisfied %u times, never violated)\n",
+                            src->learned_output_byte, dst->learned_output_byte, c->times_satisfied);
+                }
+            }
+        } else if (src_active && !dst_active) {
+            // Source fired but destination didn't → RULE VIOLATION!
+            if (c->times_violated < 255) c->times_violated++;
+            
+            // If this is a rule, this is SERIOUS
+            if (c->is_rule) {
+                // Penalty for breaking a rule!
+                src->energy -= 10.0f;  // Heavy penalty
+                
+                if (g_debug && g_graph.tick % 50 == 0) {
+                    fprintf(stderr, "[RULE VIOLATION] '%c' fired but '%c' didn't! (violations=%u)\n",
+                            src->learned_output_byte, dst->learned_output_byte, c->times_violated);
+                }
+                
+                // Demote from rule if violated too many times
+                if (c->times_violated > 10) {
+                    c->is_rule = 0;
+                    c->rule_strength = 0;
+                }
+            }
+            
+            // Slight decay
+            c->weight -= learning_rate * 0.01f;
+            if (c->weight < 0.0f) c->weight = 0.0f;
         } else {
             // Not co-active → slight decay
             c->weight -= learning_rate * 0.01f;
@@ -735,7 +811,51 @@ void learn() {
 }
 
 /* ========================================================================
- * OUTPUT SYSTEM - Learned byte emission
+ * OUTPUT VALIDATION - Check if pattern is complete
+ * ======================================================================== */
+
+int validate_output_completeness() {
+    // Check if all RULES were satisfied
+    uint32_t rule_count = 0;
+    uint32_t satisfied_count = 0;
+    uint32_t violated_count = 0;
+    
+    for (uint32_t i = 0; i < g_graph.connection_count; i++) {
+        Connection *c = &g_graph.connections[i];
+        
+        if (!c->is_rule) continue;
+        
+        rule_count++;
+        
+        if (c->src >= g_graph.node_count || c->dst >= g_graph.node_count) continue;
+        
+        Node *src = &g_graph.nodes[c->src];
+        Node *dst = &g_graph.nodes[c->dst];
+        
+        // RULE CHECK: IF src fired, did dst fire?
+        if (src->state > 0.5f) {
+            if (dst->state > 0.5f) {
+                satisfied_count++;  // Rule held!
+            } else {
+                violated_count++;   // Rule broken!
+            }
+        }
+    }
+    
+    // Pattern is complete if NO rules violated
+    if (violated_count > 0) {
+        return 0;  // FAIL - rules broken
+    }
+    
+    // And most rules satisfied
+    float completeness = (rule_count > 0) ? 
+                         (float)satisfied_count / (float)rule_count : 1.0f;
+    
+    return (completeness >= 0.8f);
+}
+
+/* ========================================================================
+ * OUTPUT SYSTEM - Learned byte emission with completeness checking
  * ======================================================================== */
 
 void emit_output() {
@@ -780,10 +900,38 @@ void emit_output() {
         }
     }
     
+    // VALIDATE OUTPUT BEFORE EMITTING
+    int is_complete = validate_output_completeness();
+    
     // Write output
     if (output_len > 0) {
         write(STDOUT_FILENO, output_buffer, output_len);
         write(STDOUT_FILENO, "\n", 1);
+        
+        // REINFORCEMENT: Only reward complete outputs!
+        if (is_complete) {
+            // Reward all active nodes for producing complete pattern
+            for (uint32_t i = 21; i < g_graph.node_count; i++) {
+                if (g_graph.nodes[i].state > 0.5f) {
+                    g_graph.nodes[i].energy += 2.0f;  // Bonus for completeness!
+                }
+            }
+            
+            if (g_debug && g_graph.tick % 50 == 0) {
+                fprintf(stderr, "[COMPLETE] Output passed validation, nodes rewarded\n");
+            }
+        } else {
+            // Incomplete output - penalize
+            for (uint32_t i = 21; i < g_graph.node_count; i++) {
+                if (g_graph.nodes[i].state > 0.5f) {
+                    g_graph.nodes[i].energy -= 1.0f;  // Penalty for incompleteness
+                }
+            }
+            
+            if (g_debug && g_graph.tick % 50 == 0) {
+                fprintf(stderr, "[INCOMPLETE] Output missing required nodes, penalized\n");
+            }
+        }
     }
 }
 
