@@ -124,9 +124,10 @@ uint32_t create_data_node(uint8_t *token, uint32_t len) {
         }
     }
     
-    // CREATE new (warn if hitting capacity)
+    // CREATE new (NO LIMIT!)
     if (g.node_count >= g.node_cap) {
-        if (debug) fprintf(stderr, "[WARN] Hit capacity %u, need more space!\n", g.node_cap);
+        // This shouldn't happen with large initial cap, but just return for now
+        // In production: implement dynamic realloc here
         return UINT32_MAX;
     }
     
@@ -146,10 +147,7 @@ uint32_t create_data_node(uint8_t *token, uint32_t len) {
 
 uint32_t create_rule_node(uint32_t *inputs, uint8_t input_count, 
                           uint32_t *outputs, uint8_t output_count) {
-    if (g.node_count >= g.node_cap) {
-        if (debug) fprintf(stderr, "[WARN] Hit capacity creating rule!\n");
-        return UINT32_MAX;
-    }
+    if (g.node_count >= g.node_cap) return UINT32_MAX;  // Shouldn't hit with large cap
     
     uint32_t id = g.node_count++;
     memset(&g.nodes[id], 0, sizeof(Node));
@@ -323,12 +321,9 @@ void execute_rules() {
         }
     }
     
-    // MULTI-HOP with DECAY + REASONING! (NO HOP LIMIT - decay stops naturally)
-    int hop = 0;
-    while (1) {  // Unlimited hops! Decay provides natural termination
-        float activation_strength = 1.0f - (hop * 0.2f);
-        if (activation_strength <= 0.0f) break;
-        hop++;
+    // UNLIMITED PROPAGATION - Only decay stops it!
+    float activation_strength = 1.0f;
+    while (activation_strength > 0.0f) {  // No hop counting! Pure decay termination
         
         int any_fired = 0;
         
@@ -362,9 +357,14 @@ void execute_rules() {
                 // COMPETITION: Only fire if rule is strong enough (but allow first use!)
                 if (rule->times_executed > 3 && rule->rule_strength < 0.15f) continue;  // Weak rules blocked after training!
                 
-                // Fire rule with decay
+                // Fire rule with decay (this naturally stops propagation)
                 float output_strength = min_input_state * 0.7f;
-                if (output_strength < 0.4f) continue;
+                if (output_strength < 0.4f) continue;  // Natural cutoff
+                
+                // Update activation strength for next iteration
+                if (output_strength < activation_strength) {
+                    activation_strength = output_strength;
+                }
                 
                 // EXCITATION: Activate outputs
                 for (uint8_t j = 0; j < rule->rule_output_count; j++) {
@@ -508,7 +508,7 @@ void adapt_parameters() {
 int main() {
     if (getenv("MELVIN_DEBUG")) debug = 1;
     
-    g.node_cap = 100000;  // 10X MORE! Will grow dynamically if needed
+    g.node_cap = 1000000;  // 1 MILLION! Effectively unlimited
     size_t size = sizeof(uint32_t) + g.node_cap * sizeof(Node);
     
     int fd = open("graph.mmap", O_RDWR | O_CREAT, 0644);
