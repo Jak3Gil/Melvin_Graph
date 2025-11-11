@@ -468,6 +468,7 @@ int main() {
         g_graph.metabolism = 0.1f;
         g_graph.ngram_max = 10;
         g_graph.prop_hops = 5;
+        g_graph.last_word_node = UINT32_MAX;
     }
     
     fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
