@@ -124,8 +124,11 @@ uint32_t create_data_node(uint8_t *token, uint32_t len) {
         }
     }
     
-    // CREATE new
-    if (g.node_count >= g.node_cap) return UINT32_MAX;
+    // CREATE new (warn if hitting capacity)
+    if (g.node_count >= g.node_cap) {
+        if (debug) fprintf(stderr, "[WARN] Hit capacity %u, need more space!\n", g.node_cap);
+        return UINT32_MAX;
+    }
     
     uint32_t id = g.node_count++;
     memset(&g.nodes[id], 0, sizeof(Node));
