@@ -1143,11 +1143,12 @@ void emit_output() {
     uint8_t output_buffer[1024];
     uint32_t output_len = 0;
     
-    // Output active tokens (prefer longer tokens!)
-    // Sort by frequency and length (longer, more frequent = better)
+    // Output based on GENERALIZATION only!
+    // NOT prediction, NOT activation strength, NOT connection weights
+    // ONLY: Which patterns are most reusable across contexts?
     typedef struct {
         uint32_t node_id;
-        uint32_t score;  // frequency * token_len
+        float score;  // Generalization score
     } TokenCandidate;
     
     TokenCandidate candidates[256];
@@ -1157,21 +1158,40 @@ void emit_output() {
     for (uint32_t i = 21; i < g_graph.node_count && candidate_count < 256; i++) {
         Node *node = &g_graph.nodes[i];
         
-        if (g_debug && node->state > 0.5f && node->token_len > 0) {
-            fprintf(stderr, "[CANDIDATE?] Node %u state=%.2f energy=%.1f token_len=%u\n",
-                    i, node->state, node->energy, node->token_len);
-        }
-        
         if (node->state <= output_threshold) continue;
         if (node->energy <= output_cost) continue;
         if (node->token_len == 0) continue;
         
+        // GENERALIZATION SCORE (NOT prediction!)
+        // How many different contexts has this pattern been used in?
+        // = out_degree (number of different things it connects to)
+        // = frequency (how many times it's been reused)
+        
+        float generalization = 0.0f;
+        
+        // Factor 1: REUSE FREQUENCY (70%)
+        // How often has this pattern been applied?
+        generalization += (float)node->frequency * 7.0f;
+        
+        // Factor 2: CONTEXT DIVERSITY (30%)  
+        // How many different contexts (connections)?
+        generalization += (float)node->out_degree * 3.0f;
+        
         candidates[candidate_count].node_id = i;
-        candidates[candidate_count].score = node->frequency * node->token_len;
+        candidates[candidate_count].score = generalization;
         candidate_count++;
+        
+        if (g_debug && node->state > 0.5f) {
+            fprintf(stderr, "[CANDIDATE] Node %u: ", i);
+            for (uint8_t b = 0; b < node->token_len && b < 10; b++) {
+                fprintf(stderr, "%c", node->token[b]);
+            }
+            fprintf(stderr, " gen=%.1f (freq=%u, out_degree=%u)\n",
+                    generalization, node->frequency, node->out_degree);
+        }
     }
     
-    // Sort by score (higher = better)
+    // Sort by GENERALIZATION score (higher = more general = better)
     for (uint32_t i = 0; i < candidate_count; i++) {
         for (uint32_t j = i + 1; j < candidate_count; j++) {
             if (candidates[j].score > candidates[i].score) {
@@ -1179,6 +1199,18 @@ void emit_output() {
                 candidates[i] = candidates[j];
                 candidates[j] = tmp;
             }
+        }
+    }
+    
+    if (g_debug && candidate_count > 0) {
+        fprintf(stderr, "[OUTPUT] Top 3 most general patterns:\n");
+        for (uint32_t i = 0; i < candidate_count && i < 3; i++) {
+            Node *n = &g_graph.nodes[candidates[i].node_id];
+            fprintf(stderr, "  %u. ", i+1);
+            for (uint8_t b = 0; b < n->token_len && b < 10; b++) {
+                fprintf(stderr, "%c", n->token[b]);
+            }
+            fprintf(stderr, " (score=%.1f)\n", candidates[i].score);
         }
     }
     
