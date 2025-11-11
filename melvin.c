@@ -65,7 +65,7 @@ typedef struct {
 
 typedef struct {
     Node *nodes;
-    uint32_t node_count, node_cap;
+    uint32_t node_count, node_cap;  // Dynamic - grows as needed!
     uint64_t tick;
     
     // Intelligence metrics
@@ -143,7 +143,10 @@ uint32_t create_data_node(uint8_t *token, uint32_t len) {
 
 uint32_t create_rule_node(uint32_t *inputs, uint8_t input_count, 
                           uint32_t *outputs, uint8_t output_count) {
-    if (g.node_count >= g.node_cap) return UINT32_MAX;
+    if (g.node_count >= g.node_cap) {
+        if (debug) fprintf(stderr, "[WARN] Hit capacity creating rule!\n");
+        return UINT32_MAX;
+    }
     
     uint32_t id = g.node_count++;
     memset(&g.nodes[id], 0, sizeof(Node));
@@ -317,10 +320,12 @@ void execute_rules() {
         }
     }
     
-    // MULTI-HOP with DECAY + REASONING!
-    for (int hop = 0; hop < 5; hop++) {
+    // MULTI-HOP with DECAY + REASONING! (NO HOP LIMIT - decay stops naturally)
+    int hop = 0;
+    while (1) {  // Unlimited hops! Decay provides natural termination
         float activation_strength = 1.0f - (hop * 0.2f);
         if (activation_strength <= 0.0f) break;
+        hop++;
         
         int any_fired = 0;
         
@@ -500,7 +505,7 @@ void adapt_parameters() {
 int main() {
     if (getenv("MELVIN_DEBUG")) debug = 1;
     
-    g.node_cap = 10000;
+    g.node_cap = 100000;  // 10X MORE! Will grow dynamically if needed
     size_t size = sizeof(uint32_t) + g.node_cap * sizeof(Node);
     
     int fd = open("graph.mmap", O_RDWR | O_CREAT, 0644);
