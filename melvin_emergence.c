@@ -1229,38 +1229,71 @@ void emit_output() {
         }
     }
     
-    // Output ONLY word-level tokens (length >= 2), skip sub-ngrams
-    for (uint32_t i = 0; i < candidate_count && output_len < 1020; i++) {
-        uint32_t node_id = candidates[i].node_id;
-        Node *node = &g_graph.nodes[node_id];
+    // Output nodes reachable from INPUT through rules
+    // Start from input nodes, follow strongest connection, output that
+    // This is RULE EXECUTION not prediction!
+    
+    uint8_t output_sequence[128];
+    uint32_t output_seq_len = 0;
+    
+    // Find which input nodes are active (from sense_input)
+    uint32_t input_nodes[10];
+    uint32_t input_count = 0;
+    
+    for (uint32_t i = 21; i < g_graph.node_count && input_count < 10; i++) {
+        Node *node = &g_graph.nodes[i];
         
-        // Only output complete words (2+ chars)
-        if (node->token_len < 2) continue;
-        
-        // Skip if this is a substring of a higher-ranked candidate
-        int is_substring = 0;
-        for (uint32_t j = 0; j < i; j++) {
-            Node *other = &g_graph.nodes[candidates[j].node_id];
-            if (other->token_len > node->token_len) {
-                // Check if node's token is substring of other's token
-                for (uint32_t offset = 0; offset + node->token_len <= other->token_len; offset++) {
-                    int matches = 1;
-                    for (uint32_t b = 0; b < node->token_len; b++) {
-                        if (node->token[b] != other->token[offset + b]) {
-                            matches = 0;
-                            break;
-                        }
-                    }
-                    if (matches) {
-                        is_substring = 1;
-                        break;
-                    }
+        // Was this node activated by input (not propagation)?
+        // Check if its token appears in current_input
+        int in_input = 0;
+        for (uint32_t p = 0; p + node->token_len <= g_graph.current_input_len; p++) {
+            int matches = 1;
+            for (uint32_t b = 0; b < node->token_len; b++) {
+                if (g_graph.current_input[p + b] != node->token[b]) {
+                    matches = 0;
+                    break;
                 }
             }
-            if (is_substring) break;
+            if (matches && node->token_len >= 2) {  // Only words
+                input_nodes[input_count++] = i;
+                in_input = 1;
+                break;
+            }
         }
+    }
+    
+    // For each input node, follow its STRONGEST outgoing rule
+    for (uint32_t inp = 0; inp < input_count && output_seq_len < 128; inp++) {
+        uint32_t current_node = input_nodes[inp];
+        output_sequence[output_seq_len++] = current_node;
         
-        if (is_substring) continue;
+        // Follow rules for N steps
+        for (uint32_t step = 0; step < 3 && output_seq_len < 128; step++) {
+            // Find strongest outgoing connection from current node
+            float strongest_weight = 0.0f;
+            uint32_t next_node = UINT32_MAX;
+            
+            for (uint32_t c = 0; c < g_graph.connection_count; c++) {
+                Connection *conn = &g_graph.connections[c];
+                if (conn->src == current_node && conn->weight > strongest_weight) {
+                    strongest_weight = conn->weight;
+                    next_node = conn->dst;
+                }
+            }
+            
+            // Found next node via rule? Follow it!
+            if (next_node != UINT32_MAX && next_node < g_graph.node_count) {
+                output_sequence[output_seq_len++] = next_node;
+                current_node = next_node;
+            } else {
+                break;  // No more rules to follow
+            }
+        }
+    }
+    
+    // Output the sequence determined by rules
+    for (uint32_t i = 0; i < output_seq_len && output_len < 1020; i++) {
+        Node *node = &g_graph.nodes[output_sequence[i]];
         
         // Output token
         for (uint32_t b = 0; b < node->token_len && output_len < 1024; b++) {
@@ -1268,7 +1301,9 @@ void emit_output() {
         }
         
         // Space between words
-        if (output_len < 1023) output_buffer[output_len++] = ' ';
+        if (i < output_seq_len - 1 && output_len < 1023) {
+            output_buffer[output_len++] = ' ';
+        }
         
         node->energy -= output_cost * 0.1f;
         node->energy += 1.0f;
