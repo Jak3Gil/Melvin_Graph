@@ -1,0 +1,88 @@
+# COHERENCE = GENERALIZATION (They're the same!)
+
+## Example:
+
+Training: "the quick brown fox" × 20
+
+Creates a COHERENT CLUSTER:
+  {the, quick, brown, fox}
+  - Strongly interconnected
+  - Always activate together
+  - Low tension (stable pattern)
+
+## Test 1: "the slow brown dog"
+
+Option A: Force new data into old cluster (HIGH GENERALIZATION)
+  - Reuse: the, brown (fit cluster!)
+  - Replace: slow→quick, dog→fox
+  - Output: "the quick brown fox"
+  - LOW tension (fits existing pattern!)
+  - HIGH generalization (reused cluster!)
+
+Option B: Create new pattern (LOW GENERALIZATION)
+  - New cluster: {the, slow, brown, dog}
+  - Creates tension with old cluster
+  - HIGH tension (conflicts!)
+  - LOW generalization (created new!)
+
+## The Rule:
+
+```
+Output = interpretation that minimizes tension
+
+Tension = Σ(conflicts between active nodes)
+
+Low tension = nodes fit together well = COHERENT
+Low tension = reusing existing patterns = GENERALIZATION
+
+COHERENCE IS GENERALIZATION!
+```
+
+## How to Measure Tension?
+
+For each candidate output, calculate:
+```
+tension = 0
+
+for (each pair of output nodes):
+  if (no connection) → tension += 1.0
+  if (weak connection) → tension += (1.0 - weight)
+  if (strong connection) → tension += 0.0
+
+Output = candidate with lowest tension
+```
+
+## Example:
+
+Input: "the slow brown dog"
+
+Candidate 1: [the, slow, brown, dog]
+  - the↔slow: no connection → tension += 1.0
+  - slow↔brown: weak → tension += 0.8
+  - brown↔dog: weak → tension += 0.7
+  Total tension = 2.5
+
+Candidate 2: [the, quick, brown, fox]
+  - the↔quick: strong → tension += 0.1
+  - quick↔brown: strong → tension += 0.1
+  - brown↔fox: strong → tension += 0.1
+  Total tension = 0.3 ← WINS!
+
+Output: "the quick brown fox" (most coherent = most generalizes!)
+
+## The Unified Rule:
+
+```
+GENERALIZATION = minimizing graph tension
+            = finding coherent clusters
+            = reusing strongly-connected patterns
+            = low-energy interpretation
+```
+
+ONE MEASURE for both concepts!
+
+Generalization isn't separate from coherence.
+Generalization IS coherence!
+
+The system that finds the most coherent interpretation
+IS the system that generalizes best!
