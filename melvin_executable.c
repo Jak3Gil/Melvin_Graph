@@ -139,64 +139,45 @@ uint32_t create_rule_node(uint32_t *inputs, uint8_t input_count,
 
 /* EXECUTE only RELEVANT rules (coherence-based!) */
 void execute_rules() {
-    // Mark which nodes were activated by INPUT (not by rules)
-    static uint8_t from_input[10000];
-    memset(from_input, 0, sizeof(from_input));
+    // Save input state (nodes active from THIS input, not propagation)
+    static uint8_t was_input[10000];
+    memset(was_input, 0, sizeof(was_input));
     
     for (uint32_t i = 0; i < g.node_count && i < 10000; i++) {
         if (g.nodes[i].type == NODE_DATA && g.nodes[i].state > 0.99f) {
-            from_input[i] = 1;  // Directly from input
+            was_input[i] = 1;
         }
     }
     
-    // Only execute rules whose inputs are from current input
+    // Execute rules whose inputs match INPUT (prevent chain reactions!)
     for (uint32_t i = 0; i < g.node_count; i++) {
         Node *rule = &g.nodes[i];
         
         if (rule->type != NODE_RULE) continue;
-        if (rule->energy <= 0.0f) continue;
         
-        // Check if ALL inputs are active AND from current input
-        int all_from_input = 1;
+        // Check if ALL rule inputs are from current input
+        int inputs_match = 1;
         for (uint8_t j = 0; j < rule->rule_input_count; j++) {
-            uint32_t input_id = rule->rule_inputs[j];
-            if (input_id >= g.node_count || !from_input[input_id]) {
-                all_from_input = 0;
+            if (rule->rule_inputs[j] >= 10000 || !was_input[rule->rule_inputs[j]]) {
+                inputs_match = 0;
                 break;
             }
         }
         
-        // EXECUTE RULE only if inputs match current context!
-        if (all_from_input) {
+        // Execute ONLY if this rule matches current input
+        if (inputs_match) {
             for (uint8_t j = 0; j < rule->rule_output_count; j++) {
-                uint32_t output_id = rule->rule_outputs[j];
-                if (output_id < g.node_count) {
-                    g.nodes[output_id].state = 1.0f;  // ACTIVATE!
-                    
-                    if (debug) {
-                        printf("[RULE FIRES] %u: ", i);
-                        for (uint8_t k = 0; k < rule->rule_input_count; k++) {
-                            uint32_t inp = rule->rule_inputs[k];
-                            if (inp < g.node_count && g.nodes[inp].type == NODE_DATA) {
-                                for (uint32_t b = 0; b < g.nodes[inp].token_len && b < 5; b++) {
-                                    printf("%c", g.nodes[inp].token[b]);
-                                }
-                                printf(" ");
-                            }
-                        }
-                        printf("→ ");
-                        if (g.nodes[output_id].type == NODE_DATA) {
-                            for (uint32_t b = 0; b < g.nodes[output_id].token_len && b < 5; b++) {
-                                printf("%c", g.nodes[output_id].token[b]);
-                            }
-                        }
-                        printf("\n");
-                    }
+                uint32_t out_id = rule->rule_outputs[j];
+                if (out_id < g.node_count) {
+                    g.nodes[out_id].state = 0.8f;  // Activate (slightly less than input)
                 }
             }
             
             rule->times_executed++;
-            rule->rule_strength += 0.1f;
+            
+            if (debug) {
+                printf("[EXECUTE] Rule %u\n", i);
+            }
         }
     }
 }
@@ -374,10 +355,8 @@ int main() {
             usleep(10000);
         }
         
-        // EXECUTE all rule nodes (they run as programs!)
-        for (int hop = 0; hop < 5; hop++) {
-            execute_rules();
-        }
+        // EXECUTE all rule nodes ONCE per input (prevent cycles!)
+        execute_rules();
         
         // Detect patterns (creates pattern nodes)
         detect_patterns();
