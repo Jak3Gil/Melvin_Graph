@@ -26,3 +26,23 @@ int main() {
     printf("Threshold: 0.50 (need > 0.50 to generalize)\n");
     return 0;
 }
+
+void detailed() {
+    printf("\nDetailed analysis:\n");
+    printf("'beans' vs 'sat':\n");
+    printf("  b vs s: no\n");
+    printf("  e vs a: no\n");
+    printf("  a vs t: no\n");
+    printf("  Similarity: %.2f\n", sim("beans", "sat"));
+    printf("\n");
+    printf("'beans' vs 'bat':\n");
+    printf("  b vs b: YES\n");
+    printf("  e vs a: no\n");
+    printf("  a vs t: no\n");
+    printf("  Similarity: %.2f (1/5 = 0.20)\n", sim("beans", "bat"));
+}
+
+int main_new() {
+    detailed();
+    return 0;
+}

@@ -250,6 +250,13 @@ void generalize_rules() {
             
             float similarity = token_similarity(&g.nodes[inp], &g.nodes[sim]);
             
+            if (debug && similarity > 0.0f) {
+                printf("[SIM] Node %u ('%.*s') vs %u ('%.*s'): %.2f (threshold %.2f)\n",
+                       inp, g.nodes[inp].token_len, g.nodes[inp].token,
+                       sim, g.nodes[sim].token_len, g.nodes[sim].token,
+                       similarity, g.similarity_threshold);
+            }
+            
             if (similarity > g.similarity_threshold) {
                 // Find rule for similar node
                 for (uint32_t r = 0; r < g.node_count; r++) {
@@ -339,7 +346,8 @@ void emit_output() {
     for (uint32_t i = 0; i < g.node_count; i++) {
         if (g.nodes[i].type != NODE_DATA) continue;
         if (g.nodes[i].state < 0.5f) continue;
-        if (from_input[i]) continue;
+        if (from_input[i]) continue;  // Skip input nodes
+        
         
         for (uint32_t b = 0; b < g.nodes[i].token_len; b++) {
             output[output_len++] = g.nodes[i].token[b];
@@ -422,11 +430,8 @@ void adapt_parameters() {
         g.patterns_reused = 0;
     }
     
-    // Adapt similarity threshold based on success
-    // Lower threshold = more generalization
-    if (g.similarity_threshold > 0.3f) {
-        g.similarity_threshold -= 0.01f;
-    }
+    // Similarity threshold stays FIXED at 0.5
+    // (Removed adaptive decay - it caused over-generalization)
 }
 
 /* ========================================================================
