@@ -42,6 +42,18 @@ typedef struct {
     float energy;             // Survival currency
     float threshold;          // Firing threshold
     uint32_t last_active_tick;
+    uint32_t activation_sequence;  // ORDER within tick (for repeated activations!)
+    
+    // Hierarchical organization
+    uint8_t is_hub;           // High-degree integrator node
+    uint8_t hub_level;        // 0=byte, 1=word, 2=phrase, 3=concept
+    uint16_t in_degree;       // Count of incoming connections
+    uint16_t out_degree;      // Count of outgoing connections
+    
+    // Pattern node (represents group of nodes)
+    uint8_t is_pattern;       // This node represents a pattern
+    uint32_t pattern_members[16];  // IDs of nodes in this pattern
+    uint8_t pattern_member_count;
     
     // Output learning: tracks correlation with each byte
     float byte_correlation[256];
@@ -53,6 +65,12 @@ typedef struct {
     uint32_t dst;
     float weight;  // THE MEMORY! (0.0-10.0)
 } Connection;
+
+typedef struct {
+    uint32_t node_id;
+    uint32_t sequence;
+    uint8_t byte;
+} ActivationEvent;
 
 typedef struct {
     uint32_t node_count;
@@ -82,11 +100,18 @@ typedef struct {
     uint32_t recent_active[10];
     uint32_t recent_active_count;
     
+    // Sequence tracking (for same node activating multiple times in one tick)
+    uint32_t activation_sequence_counter;
+    
     // Input tracking for output learning
     uint8_t current_input[256];
     uint32_t current_input_len;
     uint8_t prev_input[256];
     uint32_t prev_input_len;
+    
+    // Activation event log (for recording multiple activations of same node)
+    ActivationEvent activation_log[1024];
+    uint32_t activation_log_len;
 } Graph;
 
 Graph g_graph;
@@ -226,6 +251,12 @@ uint32_t node_create() {
     n->threshold = 0.5f;
     n->last_active_tick = g_graph.tick;
     n->learned_output_byte = 0;
+    n->is_hub = 0;
+    n->hub_level = 0;  // Start as byte-level
+    n->in_degree = 0;
+    n->out_degree = 0;
+    n->is_pattern = 0;
+    n->pattern_member_count = 0;
     
     return idx;
 }
@@ -268,7 +299,217 @@ uint32_t connection_create(uint32_t src, uint32_t dst, float initial_weight) {
     c->dst = dst;
     c->weight = initial_weight;
     
+    // Update node degrees
+    g_graph.nodes[src].out_degree++;
+    g_graph.nodes[dst].in_degree++;
+    
     return idx;
+}
+
+/* ========================================================================
+ * GUARD-RAILED CONNECTION CREATION
+ * ======================================================================== */
+
+uint32_t connection_create_guarded(uint32_t src, uint32_t dst, float initial_weight) {
+    if (src >= g_graph.node_count || dst >= g_graph.node_count) {
+        return UINT32_MAX;
+    }
+    
+    if (src == dst) return UINT32_MAX;  // No self-loops for now
+    
+    Node *src_node = &g_graph.nodes[src];
+    Node *dst_node = &g_graph.nodes[dst];
+    
+    // GUARD RAIL 1: Temporal proximity
+    // Only connect nodes that activated within 10 ticks of each other
+    if (src_node->last_active_tick > 10 && dst_node->last_active_tick > 10) {
+        uint32_t tick_diff = (src_node->last_active_tick > dst_node->last_active_tick) ?
+                             src_node->last_active_tick - dst_node->last_active_tick :
+                             dst_node->last_active_tick - src_node->last_active_tick;
+        
+        if (tick_diff > 10 && !src_node->is_hub && !dst_node->is_hub) {
+            return UINT32_MAX;  // Too far apart in time
+        }
+    }
+    
+    // GUARD RAIL 2: Spatial locality (unless hub)
+    // Only connect nearby nodes (within 100 IDs) unless at least one is a hub
+    if (!src_node->is_hub && !dst_node->is_hub) {
+        uint32_t spatial_diff = (src > dst) ? src - dst : dst - src;
+        if (spatial_diff > 100) {
+            return UINT32_MAX;  // Too far apart spatially
+        }
+    }
+    
+    // GUARD RAIL 3: Energy threshold
+    // Don't waste connections on dying nodes
+    if (src_node->energy < 20.0f && dst_node->energy < 20.0f) {
+        return UINT32_MAX;  // Both nodes struggling
+    }
+    
+    // All guard rails passed - create connection
+    return connection_create(src, dst, initial_weight);
+}
+
+/* ========================================================================
+ * PATTERN CLUSTERING - Create meta-nodes for frequent patterns
+ * ======================================================================== */
+
+void detect_patterns() {
+    // Find groups of nodes that frequently activate together
+    // Create pattern nodes to represent them
+    
+    float pattern_threshold = (g_graph.node_count > 13) ?
+                              g_graph.nodes[13].state : 0.7f;  // Meta-node 13
+    
+    uint32_t min_pattern_size = 3;
+    uint32_t max_pattern_size = 10;
+    
+    // Simple pattern detection: Find sequences with strong connections
+    for (uint32_t start = 21; start < g_graph.node_count; start++) {
+        Node *start_node = &g_graph.nodes[start];
+        
+        // Skip if already part of a pattern or low energy
+        if (start_node->is_pattern || start_node->energy < 50.0f) continue;
+        
+        // Try to build a chain from this node
+        uint32_t chain[16];
+        float chain_weights[16];
+        uint32_t chain_len = 0;
+        
+        chain[chain_len++] = start;
+        uint32_t current = start;
+        
+        // Follow strongest outgoing connections
+        for (uint32_t step = 0; step < max_pattern_size - 1; step++) {
+            float best_weight = 0.0f;
+            uint32_t best_dst = UINT32_MAX;
+            
+            // Find strongest outgoing connection from current
+            for (uint32_t c = 0; c < g_graph.connection_count; c++) {
+                Connection *conn = &g_graph.connections[c];
+                if (conn->src == current && conn->weight > best_weight) {
+                    // Check if dst not already in chain
+                    int already_in_chain = 0;
+                    for (uint32_t ch = 0; ch < chain_len; ch++) {
+                        if (chain[ch] == conn->dst) {
+                            already_in_chain = 1;
+                            break;
+                        }
+                    }
+                    
+                    if (!already_in_chain) {
+                        best_weight = conn->weight;
+                        best_dst = conn->dst;
+                    }
+                }
+            }
+            
+            // If no strong connection, stop building chain
+            if (best_weight < pattern_threshold * 10.0f || best_dst == UINT32_MAX) {
+                break;
+            }
+            
+            chain[chain_len] = best_dst;
+            chain_weights[chain_len - 1] = best_weight;
+            chain_len++;
+            current = best_dst;
+        }
+        
+        // If chain is long enough and strong enough, create pattern node
+        if (chain_len >= min_pattern_size) {
+            // Check average weight
+            float avg_weight = 0.0f;
+            for (uint32_t i = 0; i < chain_len - 1; i++) {
+                avg_weight += chain_weights[i];
+            }
+            avg_weight /= (chain_len - 1);
+            
+            if (avg_weight >= 8.0f) {  // Strong pattern!
+                // Create pattern meta-node
+                uint32_t pattern_node = node_create();
+                if (pattern_node != UINT32_MAX) {
+                    Node *pnode = &g_graph.nodes[pattern_node];
+                    pnode->is_pattern = 1;
+                    pnode->hub_level = 1;  // Word-level
+                    pnode->energy = 200.0f;  // High energy
+                    pnode->threshold = 0.3f;  // Easy to activate
+                    
+                    // Store pattern members
+                    pnode->pattern_member_count = chain_len > 16 ? 16 : chain_len;
+                    for (uint32_t i = 0; i < pnode->pattern_member_count; i++) {
+                        pnode->pattern_members[i] = chain[i];
+                    }
+                    
+                    // Wire: pattern members → pattern node
+                    for (uint32_t i = 0; i < chain_len; i++) {
+                        connection_create(chain[i], pattern_node, 2.0f);
+                    }
+                    
+                    // Pattern node can also output its sequence
+                    pnode->learned_output_byte = g_graph.nodes[chain[0]].learned_output_byte;
+                    
+                    if (g_debug) {
+                        fprintf(stderr, "[PATTERN] Created node %u for %u-node sequence (avg_weight=%.1f)\n",
+                                pattern_node, chain_len, avg_weight);
+                        fprintf(stderr, "  Members: ");
+                        for (uint32_t i = 0; i < chain_len && i < 5; i++) {
+                            fprintf(stderr, "%u('%c') ", chain[i], 
+                                    g_graph.nodes[chain[i]].learned_output_byte);
+                        }
+                        if (chain_len > 5) fprintf(stderr, "...");
+                        fprintf(stderr, "\n");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* ========================================================================
+ * HUB DETECTION - Identify integrator nodes
+ * ======================================================================== */
+
+void detect_hubs() {
+    // Find nodes with high connectivity and promote them to hubs
+    float hub_degree_threshold = (g_graph.node_count > 14) ?
+                                 g_graph.nodes[14].state : 10.0f;  // Meta-node 14
+    
+    float hub_weight_threshold = (g_graph.node_count > 15) ?
+                                 g_graph.nodes[15].state : 20.0f;  // Meta-node 15
+    
+    uint32_t hubs_promoted = 0;
+    
+    for (uint32_t i = 21; i < g_graph.node_count; i++) {
+        Node *node = &g_graph.nodes[i];
+        
+        // Skip if already a hub
+        if (node->is_hub) continue;
+        
+        // Calculate total incoming weight
+        float total_in_weight = 0.0f;
+        for (uint32_t c = 0; c < g_graph.connection_count; c++) {
+            if (g_graph.connections[c].dst == i) {
+                total_in_weight += g_graph.connections[c].weight;
+            }
+        }
+        
+        // Promote to hub if high degree AND high total weight
+        if (node->in_degree >= (uint16_t)hub_degree_threshold && 
+            total_in_weight >= hub_weight_threshold) {
+            
+            node->is_hub = 1;
+            node->hub_level = 1;  // Word-level hub
+            node->threshold *= 0.8f;  // Lower threshold (easier to activate)
+            node->energy += 50.0f;  // Energy bonus for becoming hub
+            hubs_promoted++;
+            
+            if (g_debug) {
+                fprintf(stderr, "[HUB] Node %u promoted (in_deg=%u, weight=%.1f)\n",
+                        i, node->in_degree, total_in_weight);
+            }
+        }
+    }
 }
 
 /* ========================================================================
@@ -286,40 +527,42 @@ void sense_input(const uint8_t *bytes, uint32_t len) {
     float input_energy = (g_graph.node_count > 3) ? 
                          g_graph.nodes[3].state : 1.0f;  // Meta-node 3
     
+    // Reset sequence counter and activation log for this input
+    g_graph.activation_sequence_counter = 0;
+    g_graph.activation_log_len = 0;
+    
     for (uint32_t i = 0; i < len; i++) {
         uint8_t byte = bytes[i];
         
-        // Find or create node for this byte
-        // Strategy: Nodes learn which bytes activate them through correlation
+        // Find node that represents this byte (REUSE neurons!)
         uint32_t node_id = UINT32_MAX;
         float best_correlation = 0.0f;
         
-        // Search for node that responds to this byte
         for (uint32_t n = 21; n < g_graph.node_count; n++) {
             Node *node = &g_graph.nodes[n];
             
-            // Check if this node has learned to respond to this byte
+            // Find node with strongest correlation to this byte
             if (node->byte_correlation[byte] > best_correlation) {
                 best_correlation = node->byte_correlation[byte];
                 node_id = n;
             }
         }
         
-        // If no node strongly responds, create new one
+        // Create new node only if no existing node responds
         if (best_correlation < 0.5f || node_id == UINT32_MAX) {
             node_id = node_create();
+            
             if (node_id != UINT32_MAX) {
-                // Initialize correlation for this byte
                 g_graph.nodes[node_id].byte_correlation[byte] = 1.0f;
                 g_graph.nodes[node_id].learned_output_byte = byte;
                 
-                if (g_debug && g_graph.tick % 10 == 0) {
+                if (g_debug && node_id < 40) {  // Only show first few
                     fprintf(stderr, "[CREATE] Node %u for byte '%c' (%u)\n",
                             node_id, (byte >= 32 && byte < 127) ? byte : '?', byte);
                 }
             }
         } else {
-            // Strengthen correlation
+            // Strengthen existing node's correlation
             g_graph.nodes[node_id].byte_correlation[byte] += 0.1f;
             if (g_graph.nodes[node_id].byte_correlation[byte] > 10.0f) {
                 g_graph.nodes[node_id].byte_correlation[byte] = 10.0f;
@@ -330,16 +573,27 @@ void sense_input(const uint8_t *bytes, uint32_t len) {
         
         Node *node = &g_graph.nodes[node_id];
         
-        // Activate node
+        // Activate node with sequence tracking
         node->state = 1.0f;
         node->energy += input_energy;
         node->last_active_tick = g_graph.tick;
+        node->activation_sequence = g_graph.activation_sequence_counter;
         
-        // TEMPORAL WIRING: Connect to recently active nodes
+        // LOG THIS ACTIVATION EVENT (allows same node to fire multiple times!)
+        if (g_graph.activation_log_len < 1024) {
+            g_graph.activation_log[g_graph.activation_log_len].node_id = node_id;
+            g_graph.activation_log[g_graph.activation_log_len].sequence = g_graph.activation_sequence_counter;
+            g_graph.activation_log[g_graph.activation_log_len].byte = byte;
+            g_graph.activation_log_len++;
+        }
+        
+        g_graph.activation_sequence_counter++;  // Increment for next byte
+        
+        // TEMPORAL WIRING: Connect to recently active nodes (with guard rails!)
         for (uint32_t r = 0; r < g_graph.recent_active_count; r++) {
             uint32_t recent_id = g_graph.recent_active[r];
             if (recent_id != node_id && recent_id < g_graph.node_count) {
-                connection_create(recent_id, node_id, 1.0f);
+                connection_create_guarded(recent_id, node_id, 1.0f);
             }
         }
         
@@ -359,14 +613,42 @@ void propagate() {
     float transmission_cost = (g_graph.node_count > 4) ?
                               g_graph.nodes[4].state * 0.01f : 0.01f;  // Meta-node 4
     
-    // Decay all activations first
+    // Decay all activations first (SKIP META-NODES 0-20!)
     float decay_rate = (g_graph.node_count > 1) ? 
                        g_graph.nodes[1].state : 0.95f;  // Meta-node 1
     
+    // Only decay regular nodes, not meta-nodes!
     for (uint32_t i = 21; i < g_graph.node_count; i++) {
         g_graph.nodes[i].state *= decay_rate;
         if (g_graph.nodes[i].state < 0.001f) {
             g_graph.nodes[i].state = 0.0f;
+        }
+    }
+    
+    // HIERARCHICAL: Pattern nodes activate their members
+    for (uint32_t i = 21; i < g_graph.node_count; i++) {
+        Node *node = &g_graph.nodes[i];
+        
+        if (!node->is_pattern) continue;
+        if (node->state < node->threshold) continue;
+        
+        // Pattern activated! Trigger all member nodes
+        for (uint32_t m = 0; m < node->pattern_member_count; m++) {
+            uint32_t member_id = node->pattern_members[m];
+            if (member_id < g_graph.node_count) {
+                Node *member = &g_graph.nodes[member_id];
+                member->state += node->state * 0.5f;  // Pattern activates members
+                
+                // Log member activation
+                if (g_graph.activation_log_len < 1024) {
+                    g_graph.activation_log[g_graph.activation_log_len].node_id = member_id;
+                    g_graph.activation_log[g_graph.activation_log_len].sequence = g_graph.activation_sequence_counter++;
+                    g_graph.activation_log[g_graph.activation_log_len].byte = member->learned_output_byte;
+                    g_graph.activation_log_len++;
+                    
+                    member->last_active_tick = g_graph.tick;
+                }
+            }
         }
     }
     
@@ -383,9 +665,32 @@ void propagate() {
         // Skip inactive nodes
         if (src->state < 0.01f) continue;
         
-        // Weighted transmission
+        // Weighted transmission (hubs get amplification!)
         float signal = src->state * c->weight * 0.1f;
+        if (src->is_hub) signal *= 1.5f;  // Hub boost!
+        
         dst->state += signal;
+        
+        // If dst crosses threshold, LOG IT (for output!)
+        if (dst->state > dst->threshold && g_graph.activation_log_len < 1024) {
+            // Check if not already in log this tick
+            int already_logged = 0;
+            for (uint32_t l = 0; l < g_graph.activation_log_len; l++) {
+                if (g_graph.activation_log[l].node_id == c->dst) {
+                    already_logged = 1;
+                    break;
+                }
+            }
+            
+            if (!already_logged) {
+                g_graph.activation_log[g_graph.activation_log_len].node_id = c->dst;
+                g_graph.activation_log[g_graph.activation_log_len].sequence = g_graph.activation_sequence_counter++;
+                g_graph.activation_log[g_graph.activation_log_len].byte = dst->learned_output_byte;
+                g_graph.activation_log_len++;
+                
+                dst->last_active_tick = g_graph.tick;
+            }
+        }
         
         // Energy cost for transmission
         src->energy -= signal * transmission_cost;
@@ -440,38 +745,36 @@ void emit_output() {
     float output_cost = (g_graph.node_count > 4) ?
                         g_graph.nodes[4].state * 0.5f : 0.5f;  // Meta-node 4
     
-    uint8_t output_buffer[256];
+    // Use activation log (allows same node to output multiple times!)
+    uint8_t output_buffer[1024];
     uint32_t output_len = 0;
-    uint8_t already_output[256] = {0};
     
-    // Find active nodes and emit their learned bytes
-    for (uint32_t i = 21; i < g_graph.node_count && output_len < 256; i++) {
-        Node *node = &g_graph.nodes[i];
+    // Output each logged activation event in sequence order
+    for (uint32_t i = 0; i < g_graph.activation_log_len && output_len < 1024; i++) {
+        uint32_t node_id = g_graph.activation_log[i].node_id;
         
-        if (node->state <= output_threshold) continue;
-        if (node->energy <= output_cost) continue;  // Need energy to output
+        if (node_id >= g_graph.node_count) continue;
         
-        uint8_t byte = node->learned_output_byte;
+        Node *node = &g_graph.nodes[node_id];
         
-        // Deduplicate
-        if (already_output[byte]) continue;
-        already_output[byte] = 1;
+        // Don't check state - use the logged event directly!
+        // This allows same node to output multiple times
+        if (node->energy <= output_cost) continue;
         
-        output_buffer[output_len++] = byte;
+        // Output the byte from the activation event
+        output_buffer[output_len++] = g_graph.activation_log[i].byte;
         
-        // Output costs energy
-        node->energy -= output_cost;
+        // Charge energy cost
+        node->energy -= output_cost * 0.1f;  // Small cost per output
         
         // Reinforce correct outputs
-        // If this byte was in the previous input, strengthen correlation
         for (uint32_t j = 0; j < g_graph.prev_input_len; j++) {
-            if (g_graph.prev_input[j] == byte) {
-                node->byte_correlation[byte] += 0.05f;
-                if (node->byte_correlation[byte] > 10.0f) {
-                    node->byte_correlation[byte] = 10.0f;
+            if (g_graph.prev_input[j] == g_graph.activation_log[i].byte) {
+                node->byte_correlation[g_graph.activation_log[i].byte] += 0.05f;
+                if (node->byte_correlation[g_graph.activation_log[i].byte] > 10.0f) {
+                    node->byte_correlation[g_graph.activation_log[i].byte] = 10.0f;
                 }
-                // Reward with energy
-                node->energy += 1.0f;
+                node->energy += 1.0f;  // Reward
                 break;
             }
         }
@@ -589,10 +892,36 @@ void bootstrap_meta_nodes() {
     g_graph.nodes[id].energy = 10000.0f;
     g_graph.nodes[id].threshold = 999.0f;
     
-    // Nodes 6-20: Reserved for future parameters
-    for (int i = 6; i < 21; i++) {
+    // Node 6-12: Reserved
+    for (int i = 6; i < 13; i++) {
         id = node_create();
-        g_graph.nodes[id].state = 1.0f;  // Default value
+        g_graph.nodes[id].state = 1.0f;
+        g_graph.nodes[id].energy = 10000.0f;
+        g_graph.nodes[id].threshold = 999.0f;
+    }
+    
+    // Node 13: Pattern detection threshold
+    id = node_create();
+    g_graph.nodes[id].state = 0.7f;  // 70% connection strength
+    g_graph.nodes[id].energy = 10000.0f;
+    g_graph.nodes[id].threshold = 999.0f;
+    
+    // Node 14: Hub degree threshold
+    id = node_create();
+    g_graph.nodes[id].state = 5.0f;  // Need 5+ connections to become hub
+    g_graph.nodes[id].energy = 10000.0f;
+    g_graph.nodes[id].threshold = 999.0f;
+    
+    // Node 15: Hub weight threshold
+    id = node_create();
+    g_graph.nodes[id].state = 15.0f;  // Need 15+ total weight
+    g_graph.nodes[id].energy = 10000.0f;
+    g_graph.nodes[id].threshold = 999.0f;
+    
+    // Nodes 16-20: Reserved
+    for (int i = 16; i < 21; i++) {
+        id = node_create();
+        g_graph.nodes[id].state = 1.0f;
         g_graph.nodes[id].energy = 10000.0f;
         g_graph.nodes[id].threshold = 999.0f;
     }
@@ -605,6 +934,9 @@ void bootstrap_meta_nodes() {
         fprintf(stderr, "  [3] Input energy: %.2f\n", g_graph.nodes[3].state);
         fprintf(stderr, "  [4] Output/transmission cost: %.2f\n", g_graph.nodes[4].state);
         fprintf(stderr, "  [5] Metabolism cost: %.2f\n", g_graph.nodes[5].state);
+        fprintf(stderr, "  [13] Pattern threshold: %.2f\n", g_graph.nodes[13].state);
+        fprintf(stderr, "  [14] Hub degree threshold: %.1f\n", g_graph.nodes[14].state);
+        fprintf(stderr, "  [15] Hub weight threshold: %.1f\n", g_graph.nodes[15].state);
     }
 }
 
@@ -663,6 +995,15 @@ int main(int argc, char **argv) {
         emit_output();
         apply_metabolism();
         
+        // NETWORK OF NETWORKS: Detect hubs and patterns periodically
+        if (g_graph.tick % 50 == 0 && g_graph.tick > 0) {
+            detect_hubs();
+        }
+        
+        if (g_graph.tick % 100 == 0 && g_graph.tick > 0) {
+            detect_patterns();
+        }
+        
         g_graph.tick++;
         
         // Sync to disk periodically
@@ -670,11 +1011,16 @@ int main(int argc, char **argv) {
             mmap_sync();
             
             if (g_debug) {
-                fprintf(stderr, "[TICK %llu] Nodes: %u, Connections: %u, Avg energy: %.1f\n",
-                        (unsigned long long)g_graph.tick, g_graph.node_count, 
-                        g_graph.connection_count,
-                        (g_graph.node_count > 21) ? 
-                        g_graph.nodes[21].energy : 0.0f);
+                uint32_t hub_count = 0;
+                uint32_t pattern_count = 0;
+                for (uint32_t i = 21; i < g_graph.node_count; i++) {
+                    if (g_graph.nodes[i].is_hub) hub_count++;
+                    if (g_graph.nodes[i].is_pattern) pattern_count++;
+                }
+                
+                fprintf(stderr, "[TICK %llu] Nodes: %u (%u hubs, %u patterns), Connections: %u\n",
+                        (unsigned long long)g_graph.tick, g_graph.node_count,
+                        hub_count, pattern_count, g_graph.connection_count);
             }
         }
     }
