@@ -272,7 +272,10 @@ void sense_input(const uint8_t *bytes, uint32_t len) {
         
         // RULE 2: WIRE sequentially (longest tokens only)
         if (longest_node != UINT32_MAX && g_graph.last_word_node != UINT32_MAX) {
-            connection_create(g_graph.last_word_node, longest_node, 1.0f);
+            uint32_t conn_id = connection_create(g_graph.last_word_node, longest_node, 1.0f);
+            if (g_debug && conn_id != UINT32_MAX) {
+                fprintf(stderr, "[CONNECT] %u → %u\n", g_graph.last_word_node, longest_node);
+            }
         }
         g_graph.last_word_node = longest_node;
     }
@@ -339,8 +342,15 @@ void emit_output() {
     // Start from last input node, follow strongest connections
     uint32_t current = g_graph.last_word_node;
     
+    if (g_debug) {
+        fprintf(stderr, "[OUTPUT] Starting from node %u\n", current);
+    }
+    
     for (uint32_t step = 0; step < 5 && output_len < 1000; step++) {
-        if (current >= g_graph.node_count) break;
+        if (current >= g_graph.node_count) {
+            if (g_debug) fprintf(stderr, "[OUTPUT] Invalid node %u\n", current);
+            break;
+        }
         
         Node *node = &g_graph.nodes[current];
         
@@ -349,6 +359,14 @@ void emit_output() {
             output[output_len++] = node->token[b];
         }
         if (output_len < 1023) output[output_len++] = ' ';
+        
+        if (g_debug) {
+            fprintf(stderr, "[OUTPUT] Step %u: node %u (", step, current);
+            for (uint32_t b = 0; b < node->token_len && b < 10; b++) {
+                fprintf(stderr, "%c", node->token[b]);
+            }
+            fprintf(stderr, ")\n");
+        }
         
         // Find strongest outgoing connection
         float strongest = 0.0f;
@@ -362,6 +380,11 @@ void emit_output() {
             }
         }
         
+        if (g_debug) {
+            fprintf(stderr, "[OUTPUT] Strongest conn: %u→%u (weight=%.2f)\n", 
+                    current, next, strongest);
+        }
+        
         if (next == UINT32_MAX || strongest < 0.5f) break;
         current = next;
     }
@@ -369,6 +392,8 @@ void emit_output() {
     if (output_len > 0) {
         write(STDOUT_FILENO, output, output_len);
         write(STDOUT_FILENO, "\n", 1);
+    } else if (g_debug) {
+        fprintf(stderr, "[OUTPUT] No output generated\n");
     }
 }
 
