@@ -365,6 +365,8 @@ uint32_t connection_create(uint32_t src, uint32_t dst, float initial_weight) {
 
 void sense_input(const uint8_t *bytes, uint32_t len);
 void propagate();
+void mutate();
+void reproduce();
 
 /* ========================================================================
  * INTELLIGENCE RULE 7: GENERALIZATION TEST
@@ -454,6 +456,7 @@ void predict_next() {
     }
 }
 
+// EVOLUTION FACTOR 6: FITNESS (accuracy = survival)
 void validate_predictions(uint8_t actual_byte) {
     // Check all predictions against actual input
     // REWARD accurate predictions (intelligence!)
@@ -1460,6 +1463,10 @@ int main(int argc, char **argv) {
         emit_output();
         apply_metabolism();
         
+        // EVOLUTION: Mutation and reproduction
+        mutate();
+        reproduce();
+        
         // NETWORK OF NETWORKS: Detect hubs and patterns periodically
         if (g_graph.tick % 50 == 0 && g_graph.tick > 0) {
             detect_hubs();
@@ -1467,8 +1474,6 @@ int main(int argc, char **argv) {
         
         if (g_graph.tick % 100 == 0 && g_graph.tick > 0) {
             detect_patterns();
-            
-            // INTELLIGENCE RULE 7: Test generalization
             test_generalization();
         }
         
@@ -1497,3 +1502,143 @@ int main(int argc, char **argv) {
     return 0;
 }
 
+
+/* ========================================================================
+ * EVOLUTION FACTOR 7: MUTATION (explore new patterns)
+ * ======================================================================== */
+
+void mutate() {
+    // Every N ticks, create random connections to explore new patterns
+    if (g_graph.tick % 50 != 0) return;
+    if (g_graph.node_count < 30) return;
+    
+    // Random mutation: 1% chance to create new connection
+    if (rand() % 100 < 1) {
+        uint32_t src = 21 + (rand() % (g_graph.node_count - 21));
+        uint32_t dst = 21 + (rand() % (g_graph.node_count - 21));
+        
+        if (src != dst && g_graph.nodes[src].frequency > 0 && g_graph.nodes[dst].frequency > 0) {
+            Connection *existing = find_connection(src, dst);
+            if (!existing) {
+                uint32_t conn_id = connection_create(src, dst, 0.1f);  // Weak mutation
+                
+                if (g_debug && conn_id != UINT32_MAX) {
+                    fprintf(stderr, "[MUTATION] Random connection %u → %u created\n", src, dst);
+                }
+            }
+        }
+    }
+}
+
+/* ========================================================================
+ * EVOLUTION FACTOR 8: REPRODUCTION (copy successful patterns)
+ * ======================================================================== */
+
+/* ========================================================================
+ * INTELLIGENCE FITNESS: Measure IQ not just survival
+ * ======================================================================== */
+
+float calculate_intelligence_fitness(Node *node) {
+    float iq_score = 0.0f;
+    
+    // IQ FACTOR 1: PREDICTION ACCURACY (40% of fitness)
+    if (node->predictions_correct + node->predictions_wrong > 0) {
+        float accuracy = (float)node->predictions_correct / 
+                        (float)(node->predictions_correct + node->predictions_wrong);
+        iq_score += accuracy * 40.0f;
+    }
+    
+    // IQ FACTOR 2: PATTERN COMPRESSION (30% of fitness)
+    // Longer tokens = better compression (more info per node)
+    if (node->token_len > 1) {
+        iq_score += (float)node->token_len * 5.0f;  // Max 30 for 6+ char tokens
+    }
+    
+    // IQ FACTOR 3: GENERALIZATION (20% of fitness)
+    // Nodes used in multiple contexts (high out_degree) = more general
+    if (node->out_degree > 1) {
+        iq_score += (float)node->out_degree * 4.0f;  // Max 20 for 5+ connections
+    }
+    
+    // IQ FACTOR 4: CONSISTENCY (10% of fitness)
+    // Energy level indicates usefulness over time
+    if (node->energy > 100.0f) {
+        iq_score += 10.0f;
+    } else if (node->energy > 50.0f) {
+        iq_score += 5.0f;
+    }
+    
+    // PENALTY: Inaccurate predictions kill fitness
+    if (node->predictions_wrong > node->predictions_correct) {
+        iq_score *= 0.1f;  // 90% penalty for being wrong more than right
+    }
+    
+    return iq_score;
+}
+
+void reproduce() {
+    // Every 200 ticks, reward intelligent patterns
+    if (g_graph.tick % 200 != 0) return;
+    
+    // Find most intelligent nodes (not most frequent!)
+    typedef struct {
+        uint32_t node_id;
+        float iq_score;
+    } IntelligentNode;
+    
+    IntelligentNode top_iq[10];
+    uint32_t top_count = 0;
+    
+    for (uint32_t i = 21; i < g_graph.node_count && top_count < 10; i++) {
+        Node *node = &g_graph.nodes[i];
+        if (node->frequency == 0) continue;  // Skip dead nodes
+        
+        float iq = calculate_intelligence_fitness(node);
+        
+        // Keep top 10 by IQ
+        if (top_count < 10) {
+            top_iq[top_count].node_id = i;
+            top_iq[top_count].iq_score = iq;
+            top_count++;
+        } else {
+            // Replace worst if this is better
+            uint32_t worst_idx = 0;
+            for (uint32_t j = 1; j < 10; j++) {
+                if (top_iq[j].iq_score < top_iq[worst_idx].iq_score) {
+                    worst_idx = j;
+                }
+            }
+            if (iq > top_iq[worst_idx].iq_score) {
+                top_iq[worst_idx].node_id = i;
+                top_iq[worst_idx].iq_score = iq;
+            }
+        }
+    }
+    
+    // REWARD intelligent nodes (not just survival!)
+    for (uint32_t i = 0; i < top_count; i++) {
+        Node *smart_node = &g_graph.nodes[top_iq[i].node_id];
+        
+        // IQ REWARD: Energy boost proportional to intelligence
+        smart_node->energy += top_iq[i].iq_score * 2.0f;
+        
+        // Boost all connections from intelligent nodes
+        for (uint32_t c = 0; c < g_graph.connection_count; c++) {
+            if (g_graph.connections[c].src == top_iq[i].node_id) {
+                g_graph.connections[c].weight += 0.5f;
+                if (g_graph.connections[c].weight > 10.0f) {
+                    g_graph.connections[c].weight = 10.0f;
+                }
+            }
+        }
+        
+        if (g_debug) {
+            fprintf(stderr, "[INTELLIGENCE] Node %u (IQ=%.1f): \"", 
+                    top_iq[i].node_id, top_iq[i].iq_score);
+            for (uint8_t b = 0; b < smart_node->token_len && b < 10; b++) {
+                fprintf(stderr, "%c", smart_node->token[b]);
+            }
+            fprintf(stderr, "\" +%.1f energy\n", top_iq[i].iq_score * 2.0f);
+        }
+    }
+}
