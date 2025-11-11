@@ -140,8 +140,10 @@ uint32_t create_rule_node(uint32_t *inputs, uint8_t input_count,
 /* EXECUTE only RELEVANT rules (coherence-based!) */
 void execute_rules() {
     // Mark which nodes were activated by INPUT (not by rules)
-    uint8_t from_input[10000] = {0};
-    for (uint32_t i = 0; i < g.node_count; i++) {
+    static uint8_t from_input[10000];
+    memset(from_input, 0, sizeof(from_input));
+    
+    for (uint32_t i = 0; i < g.node_count && i < 10000; i++) {
         if (g.nodes[i].type == NODE_DATA && g.nodes[i].state > 0.99f) {
             from_input[i] = 1;  // Directly from input
         }
@@ -303,8 +305,10 @@ void emit_output() {
     uint32_t output_len = 0;
     
     // Find nodes activated by INPUT
-    uint8_t from_input[10000] = {0};
-    for (uint32_t i = 0; i < g.node_count; i++) {
+    static uint8_t from_input[10000];
+    memset(from_input, 0, sizeof(from_input));
+    
+    for (uint32_t i = 0; i < g.node_count && i < 10000; i++) {
         if (g.nodes[i].type == NODE_DATA && g.nodes[i].state > 0.99f) {
             from_input[i] = 1;
         }
