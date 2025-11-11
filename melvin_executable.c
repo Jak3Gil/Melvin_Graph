@@ -137,6 +137,62 @@ uint32_t create_rule_node(uint32_t *inputs, uint8_t input_count,
     return id;
 }
 
+/* GENERALIZE: Create new rules from similarity! */
+void generalize_rules() {
+    // For each input node that has NO matching rule
+    for (uint32_t inp = 0; inp < g.node_count; inp++) {
+        if (g.nodes[inp].type != NODE_DATA) continue;
+        if (g.nodes[inp].state < 0.99f) continue;  // Only input nodes
+        
+        // Check if this node has a rule
+        int has_rule = 0;
+        for (uint32_t r = 0; r < g.node_count; r++) {
+            if (g.nodes[r].type == NODE_RULE && 
+                g.nodes[r].rule_input_count == 1 &&
+                g.nodes[r].rule_inputs[0] == inp) {
+                has_rule = 1;
+                break;
+            }
+        }
+        
+        if (has_rule) continue;  // Already has a rule
+        
+        // NEW: Find SIMILAR nodes that HAVE rules
+        // Then create analogous rule!
+        for (uint32_t sim = 0; sim < g.node_count; sim++) {
+            if (g.nodes[sim].type != NODE_DATA) continue;
+            if (sim == inp) continue;
+            
+            // Calculate similarity
+            float similarity = token_similarity(&g.nodes[inp], &g.nodes[sim]);
+            
+            if (similarity > 0.5f) {  // Similar enough!
+                // Find rule for similar node
+                for (uint32_t r = 0; r < g.node_count; r++) {
+                    Node *rule = &g.nodes[r];
+                    if (rule->type != NODE_RULE) continue;
+                    if (rule->rule_input_count != 1) continue;
+                    if (rule->rule_inputs[0] != sim) continue;
+                    
+                    // Found rule: sim → output
+                    // Create analogous rule: inp → output!
+                    uint32_t new_inputs[1] = {inp};
+                    uint32_t new_rule = create_rule_node(new_inputs, 1, 
+                                                          rule->rule_outputs, 
+                                                          rule->rule_output_count);
+                    
+                    if (debug && new_rule != UINT32_MAX) {
+                        printf("[GENERALIZE] Created rule for node %u (similar to %u)\n", 
+                               inp, sim);
+                    }
+                    
+                    return;  // One generalization per tick
+                }
+            }
+        }
+    }
+}
+
 /* EXECUTE only RELEVANT rules (coherence-based!) */
 void execute_rules() {
     // Save input state (nodes active from THIS input, not propagation)
@@ -359,6 +415,9 @@ int main() {
             idle++;
             usleep(10000);
         }
+        
+        // GENERALIZE: Create new rules from similarity!
+        generalize_rules();
         
         // EXECUTE all rule nodes ONCE per input (prevent cycles!)
         execute_rules();
