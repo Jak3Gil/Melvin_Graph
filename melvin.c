@@ -315,30 +315,38 @@ void execute_rules() {
         }
     }
     
-    // Execute rules whose inputs match current input
-    for (uint32_t i = 0; i < g.node_count; i++) {
-        Node *rule = &g.nodes[i];
-        if (rule->type != NODE_RULE) continue;
+    // MULTI-HOP: Execute rules multiple times for chaining!
+    for (int hop = 0; hop < 5; hop++) {
+        int any_fired = 0;
         
-        // Check if inputs from current input
-        int inputs_match = 1;
-        for (uint8_t j = 0; j < rule->rule_input_count; j++) {
-            if (rule->rule_inputs[j] >= 10000 || !from_input[rule->rule_inputs[j]]) {
-                inputs_match = 0;
-                break;
-            }
-        }
-        
-        if (inputs_match) {
-            // Execute!
-            for (uint8_t j = 0; j < rule->rule_output_count; j++) {
-                uint32_t out_id = rule->rule_outputs[j];
-                if (out_id < g.node_count) {
-                    g.nodes[out_id].state = 0.8f;
+        for (uint32_t i = 0; i < g.node_count; i++) {
+            Node *rule = &g.nodes[i];
+            if (rule->type != NODE_RULE) continue;
+            
+            // Check if all inputs are active
+            int all_active = 1;
+            for (uint8_t j = 0; j < rule->rule_input_count; j++) {
+                uint32_t inp_id = rule->rule_inputs[j];
+                if (inp_id >= g.node_count || g.nodes[inp_id].state < 0.5f) {
+                    all_active = 0;
+                    break;
                 }
             }
-            rule->times_executed++;
+            
+            if (all_active) {
+                // Fire rule: Activate outputs
+                for (uint8_t j = 0; j < rule->rule_output_count; j++) {
+                    uint32_t out_id = rule->rule_outputs[j];
+                    if (out_id < g.node_count && g.nodes[out_id].state < 0.5f) {
+                        g.nodes[out_id].state = 0.8f;
+                        any_fired = 1;
+                    }
+                }
+                rule->times_executed++;
+            }
         }
+        
+        if (!any_fired) break;  // No more propagation possible
     }
 }
 
@@ -492,19 +500,17 @@ int main() {
         
         if (n > 0) {
             sense_input(input, n);
+            generalize_rules();  // Transfer learning!
+            execute_rules();     // Run programs!
+            emit_output();       // Show results (once per input!)
+            detect_patterns();   // Find clusters
+            adapt_parameters();  // Evolve
+            g.tick++;
             idle = 0;
         } else {
             idle++;
             usleep(10000);
         }
-        
-        generalize_rules();  // Transfer learning!
-        execute_rules();     // Run programs!
-        emit_output();       // Show results
-        detect_patterns();   // Find clusters
-        adapt_parameters();  // Evolve
-        
-        g.tick++;
     }
     
     header[0] = g.node_count;
