@@ -75,8 +75,12 @@ typedef struct {
     // EDGES ARE RULES!
     uint8_t is_rule;         // This edge is a RULE (IF src THEN dst)
     uint8_t rule_strength;   // How strictly to enforce (0-255)
-    uint8_t times_satisfied; // How many times rule held true
-    uint8_t times_violated;  // How many times rule was broken
+    uint16_t times_satisfied; // How many times rule held true
+    uint16_t times_violated;  // How many times rule was broken
+    
+    // THE FUNDAMENTAL MEASURE: PREDICTION ERROR
+    float error;             // Cumulative prediction error (0.0 = perfect)
+    uint32_t predictions;    // Total predictions made
     
     // Execution mode
     uint8_t is_implication;  // src → dst (IF-THEN)
@@ -345,12 +349,8 @@ uint32_t connection_create(uint32_t src, uint32_t dst, float initial_weight) {
     c->times_violated = 0;
     c->is_implication = 1;  // Default: src → dst (IF-THEN)
     c->is_inhibitory = 0;
-    
-    // DEBUG: Verify write
-    if (g_debug && (c->src != src || c->dst != dst)) {
-        fprintf(stderr, "[ERROR] Connection write failed! Expected %u→%u, got %u→%u\n",
-                src, dst, c->src, c->dst);
-    }
+    c->error = 0.0f;  // Start with no error
+    c->predictions = 0;
     
     // Update node degrees
     g_graph.nodes[src].out_degree++;
@@ -1538,42 +1538,45 @@ void mutate() {
  * INTELLIGENCE FITNESS: Measure IQ not just survival
  * ======================================================================== */
 
-float calculate_intelligence_fitness(Node *node) {
-    float iq_score = 0.0f;
+// THE FUNDAMENTAL INTELLIGENCE MEASURE: PREDICTION ERROR
+// Just like survival = energy, intelligence = prediction accuracy
+float calculate_prediction_error(Node *node) {
+    // Average error across all outgoing connections
+    float total_error = 0.0f;
+    uint32_t conn_count = 0;
     
-    // IQ FACTOR 1: PREDICTION ACCURACY (40% of fitness)
-    if (node->predictions_correct + node->predictions_wrong > 0) {
-        float accuracy = (float)node->predictions_correct / 
-                        (float)(node->predictions_correct + node->predictions_wrong);
-        iq_score += accuracy * 40.0f;
+    for (uint32_t i = 0; i < g_graph.connection_count; i++) {
+        Connection *c = &g_graph.connections[i];
+        if (c->src != (uint32_t)(node - g_graph.nodes)) continue;
+        if (c->predictions == 0) continue;
+        
+        // Normalized error (0.0 = perfect, 1.0 = always wrong)
+        float error_rate = c->error / (float)c->predictions;
+        total_error += error_rate;
+        conn_count++;
     }
     
-    // IQ FACTOR 2: PATTERN COMPRESSION (30% of fitness)
-    // Longer tokens = better compression (more info per node)
+    if (conn_count == 0) return 1.0f;  // No predictions = maximum error
+    
+    float avg_error = total_error / (float)conn_count;
+    
+    // Bonus for compression (longer tokens predict more efficiently)
     if (node->token_len > 1) {
-        iq_score += (float)node->token_len * 5.0f;  // Max 30 for 6+ char tokens
+        avg_error *= (1.0f / (float)node->token_len);  // Longer = lower effective error
     }
     
-    // IQ FACTOR 3: GENERALIZATION (20% of fitness)
-    // Nodes used in multiple contexts (high out_degree) = more general
-    if (node->out_degree > 1) {
-        iq_score += (float)node->out_degree * 4.0f;  // Max 20 for 5+ connections
-    }
+    return avg_error;
+}
+
+// Simple fitness: inverse of error (low error = high fitness)
+float calculate_intelligence_fitness(Node *node) {
+    float error = calculate_prediction_error(node);
     
-    // IQ FACTOR 4: CONSISTENCY (10% of fitness)
-    // Energy level indicates usefulness over time
-    if (node->energy > 100.0f) {
-        iq_score += 10.0f;
-    } else if (node->energy > 50.0f) {
-        iq_score += 5.0f;
-    }
+    // Convert error to fitness (0-100 scale)
+    // error=0.0 → fitness=100, error=1.0 → fitness=0
+    float fitness = (1.0f - error) * 100.0f;
     
-    // PENALTY: Inaccurate predictions kill fitness
-    if (node->predictions_wrong > node->predictions_correct) {
-        iq_score *= 0.1f;  // 90% penalty for being wrong more than right
-    }
-    
-    return iq_score;
+    return fitness;
 }
 
 void reproduce() {
