@@ -1,0 +1,48 @@
+# OUTPUT QUALITY ASSESSMENT
+
+## Test 1: "cat sat" training, test with "cat"
+Expected: "sat" (follows the rule)
+Actual: "cat sat dog ran bird flew" (everything!)
+
+Intelligence: 0/10
+- Outputs unrelated items (dog, ran, bird, flew)
+- Not following the specific rule
+- Just dumping all active nodes
+
+## Test 2: "1→2, 2→3, 3→4" training, test with "6"
+Expected: "7" (learned +1 pattern) OR recognize pattern
+Actual: ??? (probably all numbers)
+
+Intelligence: ???
+
+## The Problem:
+
+System creates intelligent STRUCTURE:
+✓ Rule nodes (executable)
+✓ Pattern detection
+✓ Coherent clusters
+
+But OUTPUT is dumb:
+✗ Outputs everything active
+✗ No selectivity
+✗ Doesn't demonstrate the intelligence it has!
+
+## The Missing Piece:
+
+OUTPUT SELECTION needs to:
+1. Execute relevant rules ONLY (not all rules)
+2. Select coherent subset (not everything)
+3. Demonstrate understanding with minimal output
+
+Current: Activates cat → ALL rules fire → outputs everything
+Needed: Activates cat → RELEVANT rules fire → output completion
+
+The intelligence is IN the graph.
+But output doesn't show it!
+
+## The Gap:
+
+Intelligence: 8/10 (structure is good!)
+Output Quality: 2/10 (messy, unfocused)
+
+Gap: 6 points of unrealized intelligence!
