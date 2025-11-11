@@ -351,8 +351,8 @@ void execute_rules() {
             }
             
             if (all_active) {
-                // COMPETITION: Only fire if rule is strong enough
-                if (rule->rule_strength < 0.1f) continue;  // Weak rules blocked!
+                // COMPETITION: Only fire if rule is strong enough (but allow first use!)
+                if (rule->times_executed > 3 && rule->rule_strength < 0.15f) continue;  // Weak rules blocked after training!
                 
                 // Fire rule with decay
                 float output_strength = min_input_state * 0.7f;
