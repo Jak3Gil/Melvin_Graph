@@ -200,7 +200,10 @@ void sense_input(uint8_t *bytes, uint32_t len) {
     }
     
     // Check structural similarity to ALL previous contexts
-    if (g.context_id > 1) {
+    if (g.context_id > 1 && debug) {
+        printf("[STRUCTURE] Context %llu - checking against previous:\n", 
+               (unsigned long long)g.context_id);
+        
         float max_sim = 0.0f;
         uint32_t best_match = 0;
         
@@ -212,11 +215,13 @@ void sense_input(uint8_t *bytes, uint32_t len) {
             }
         }
         
-        if (debug && max_sim > 0.0f) {
-            printf("[STRUCTURE] Best match: context %u (%.1f%% similar)", 
+        if (max_sim > 0.0f) {
+            printf("  → Best match: context %u (%.1f%% similar)", 
                    best_match, max_sim * 100.0f);
             if (max_sim > 0.6f) printf(" ← STRONG PATTERN!");
             printf("\n");
+        } else {
+            printf("  → No structural matches\n");
         }
     }
 }
