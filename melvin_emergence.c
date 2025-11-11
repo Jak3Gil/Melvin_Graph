@@ -144,6 +144,10 @@ typedef struct {
     // INTELLIGENCE RULE 7: GENERALIZATION TEST
     TestCase test_cases[10];
     uint32_t test_case_count;
+    
+    // THE FUNDAMENTAL INTELLIGENCE METRIC
+    uint32_t patterns_reused;   // Used existing pattern for new data
+    uint32_t patterns_created;  // Had to create new pattern
 } Graph;
 
 Graph g_graph;
@@ -788,7 +792,7 @@ void sense_input(const uint8_t *bytes, uint32_t len) {
                     }
                 }
                 
-                // N-gram doesn't exist - CREATE IT!
+                // N-gram doesn't exist - CREATE IT (low intelligence)
                 if (node_id == UINT32_MAX) {
                     node_id = node_create();
                     if (node_id == UINT32_MAX) continue;
@@ -800,15 +804,28 @@ void sense_input(const uint8_t *bytes, uint32_t len) {
                     }
                     new_node->frequency = 1;
                     
+                    // Had to create new pattern = not intelligent about this input
+                    g_graph.patterns_created++;
+                    
                     if (g_debug) {
                         fprintf(stderr, "[CREATE] ");
                         for (uint32_t b = 0; b < ngram_len; b++) {
                             fprintf(stderr, "%c", new_node->token[b]);
                         }
-                        fprintf(stderr, " (%u)\n", node_id);
+                        fprintf(stderr, " (%u) [NEW PATTERN]\n", node_id);
                     }
                 } else {
+                    // REUSED existing pattern = intelligence!
                     g_graph.nodes[node_id].frequency++;
+                    g_graph.patterns_reused++;
+                    
+                    if (g_debug && ngram_len >= 2) {
+                        fprintf(stderr, "[REUSE] ");
+                        for (uint32_t b = 0; b < ngram_len; b++) {
+                            fprintf(stderr, "%c", g_graph.nodes[node_id].token[b]);
+                        }
+                        fprintf(stderr, " (intelligence!)\n");
+                    }
                 }
                 
                 // Track longest token for this word
@@ -1538,43 +1555,42 @@ void mutate() {
  * INTELLIGENCE FITNESS: Measure IQ not just survival
  * ======================================================================== */
 
-// THE FUNDAMENTAL INTELLIGENCE MEASURE: PREDICTION ERROR
-// Just like survival = energy, intelligence = prediction accuracy
-float calculate_prediction_error(Node *node) {
-    // Average error across all outgoing connections
-    float total_error = 0.0f;
-    uint32_t conn_count = 0;
-    
-    for (uint32_t i = 0; i < g_graph.connection_count; i++) {
-        Connection *c = &g_graph.connections[i];
-        if (c->src != (uint32_t)(node - g_graph.nodes)) continue;
-        if (c->predictions == 0) continue;
-        
-        // Normalized error (0.0 = perfect, 1.0 = always wrong)
-        float error_rate = c->error / (float)c->predictions;
-        total_error += error_rate;
-        conn_count++;
-    }
-    
-    if (conn_count == 0) return 1.0f;  // No predictions = maximum error
-    
-    float avg_error = total_error / (float)conn_count;
-    
-    // Bonus for compression (longer tokens predict more efficiently)
-    if (node->token_len > 1) {
-        avg_error *= (1.0f / (float)node->token_len);  // Longer = lower effective error
-    }
-    
-    return avg_error;
-}
+// THE FUNDAMENTAL INTELLIGENCE MEASURE (UNSUPERVISED!)
+// Intelligence = ability to represent NEW data with OLD patterns
+//
+// User's insight: "Being able to put new inputs into old patterns"
+//
+// This is:
+// - Unsupervised (no labels needed)
+// - Objective (count reuse vs creation)
+// - Captures generalization (reusing = generalizing)
+// - Measurable (compression ratio)
 
-// Simple fitness: inverse of error (low error = high fitness)
 float calculate_intelligence_fitness(Node *node) {
-    float error = calculate_prediction_error(node);
+    float fitness = 0.0f;
     
-    // Convert error to fitness (0-100 scale)
-    // error=0.0 → fitness=100, error=1.0 → fitness=0
-    float fitness = (1.0f - error) * 100.0f;
+    // FACTOR 1: REUSE FREQUENCY (60%)
+    // How often is this pattern reused for new data?
+    // High frequency = high intelligence (pattern generalizes!)
+    if (node->frequency > 20) {
+        fitness += 60.0f;
+    } else {
+        fitness += (float)node->frequency * 3.0f;  // Up to 60
+    }
+    
+    // FACTOR 2: COMPRESSION (30%)
+    // Longer tokens = more compression = intelligence
+    // 1 node for "cat" is smarter than 3 nodes for c,a,t
+    fitness += (float)node->token_len * 10.0f;  // Max 30 for 3+ chars
+    
+    // FACTOR 3: ENERGY (10%)
+    // Patterns that help you survive = intelligent
+    // But this is secondary to reuse/compression
+    if (node->energy > 50.0f) {
+        fitness += 10.0f;
+    } else {
+        fitness += node->energy * 0.2f;  // Up to 10
+    }
     
     return fitness;
 }
@@ -1650,10 +1666,21 @@ void reproduce() {
         }
     }
     
-    if (g_debug) {
-        fprintf(stderr, "[RELATIVE SELECTION] Bottom 20%% (%u punished), Top 10%% (%u rewarded)\n",
-                killed, rewarded);
-        fprintf(stderr, "  IQ range: %.1f (worst) to %.1f (best)\n",
-                all_nodes[0].iq_score, all_nodes[active_count-1].iq_score);
-    }
+            if (g_debug) {
+                // Calculate intelligence ratio for this period
+                uint32_t total = g_graph.patterns_reused + g_graph.patterns_created;
+                float intelligence_ratio = (total > 0) ? 
+                    (float)g_graph.patterns_reused / (float)total * 100.0f : 0.0f;
+                
+                fprintf(stderr, "[RELATIVE SELECTION] Bottom 20%% (%u punished), Top 10%% (%u rewarded)\n",
+                        killed, rewarded);
+                fprintf(stderr, "  IQ range: %.1f (worst) to %.1f (best)\n",
+                        all_nodes[0].iq_score, all_nodes[active_count-1].iq_score);
+                fprintf(stderr, "  INTELLIGENCE: %.1f%% reused patterns (created %u, reused %u)\n",
+                        intelligence_ratio, g_graph.patterns_created, g_graph.patterns_reused);
+            }
+            
+            // Reset counters for next period
+            g_graph.patterns_created = 0;
+            g_graph.patterns_reused = 0;
 }
