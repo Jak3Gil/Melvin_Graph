@@ -65,7 +65,7 @@ typedef struct {
 
 typedef struct {
     Node *nodes;
-    uint32_t node_count, node_cap;  // Dynamic - grows as needed!
+    uint32_t node_count;  // Just count, no cap!
     uint64_t tick;
     
     // Intelligence metrics
@@ -500,8 +500,8 @@ void adapt_parameters() {
 int main() {
     if (getenv("MELVIN_DEBUG")) debug = 1;
     
-    g.node_cap = 1000000;  // 1 MILLION! Effectively unlimited
-    size_t size = sizeof(uint32_t) + g.node_cap * sizeof(Node);
+    size_t node_space = 1000000;  // 1M nodes worth of mmap space
+    size_t size = sizeof(uint32_t) + node_space * sizeof(Node);
     
     int fd = open("graph.mmap", O_RDWR | O_CREAT, 0644);
     struct stat st;
