@@ -137,6 +137,20 @@ uint32_t create_rule_node(uint32_t *inputs, uint8_t input_count,
     return id;
 }
 
+/* Calculate similarity between two nodes */
+float token_similarity(Node *a, Node *b) {
+    if (a->type != NODE_DATA || b->type != NODE_DATA) return 0.0f;
+    
+    uint32_t shared = 0;
+    uint32_t total = (a->token_len > b->token_len) ? a->token_len : b->token_len;
+    
+    for (uint32_t i = 0; i < a->token_len && i < b->token_len; i++) {
+        if (a->token[i] == b->token[i]) shared++;
+    }
+    
+    return (total > 0) ? (float)shared / (float)total : 0.0f;
+}
+
 /* GENERALIZE: Create new rules from similarity! */
 void generalize_rules() {
     // For each input node that has NO matching rule
