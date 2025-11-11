@@ -124,13 +124,7 @@ uint32_t create_data_node(uint8_t *token, uint32_t len) {
         }
     }
     
-    // CREATE new (NO LIMIT!)
-    if (g.node_count >= g.node_cap) {
-        // This shouldn't happen with large initial cap, but just return for now
-        // In production: implement dynamic realloc here
-        return UINT32_MAX;
-    }
-    
+    // CREATE new - no limit check!
     uint32_t id = g.node_count++;
     memset(&g.nodes[id], 0, sizeof(Node));
     g.nodes[id].type = NODE_DATA;
@@ -147,9 +141,7 @@ uint32_t create_data_node(uint8_t *token, uint32_t len) {
 
 uint32_t create_rule_node(uint32_t *inputs, uint8_t input_count, 
                           uint32_t *outputs, uint8_t output_count) {
-    if (g.node_count >= g.node_cap) return UINT32_MAX;  // Shouldn't hit with large cap
-    
-    uint32_t id = g.node_count++;
+    uint32_t id = g.node_count++;  // No limit!
     memset(&g.nodes[id], 0, sizeof(Node));
     g.nodes[id].type = NODE_RULE;
     g.nodes[id].rule_input_count = input_count;
@@ -457,7 +449,7 @@ void detect_patterns() {
             }
         }
         
-        if (cluster_size >= 3 && g.node_count < g.node_cap) {
+        if (cluster_size >= 3) {  // No cap check!
             uint32_t pattern_id = g.node_count++;
             memset(&g.nodes[pattern_id], 0, sizeof(Node));
             g.nodes[pattern_id].type = NODE_PATTERN;
