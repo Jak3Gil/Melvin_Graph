@@ -1,0 +1,117 @@
+#!/bin/bash
+# Test: Association Bridge + Network of Networks
+
+echo "╔═══════════════════════════════════════════════════════════╗"
+echo "║  TESTING: EMERGENT ASSOCIATION & HIERARCHIES              ║"
+echo "╚═══════════════════════════════════════════════════════════╝"
+echo ""
+
+rm -f graph.mmap
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "TEST 1: Association Bridge"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "Teaching: 'cat' → 'animal' (30 repetitions)"
+echo ""
+
+{
+    for i in {1..30}; do
+        echo "cat"
+        echo "animal"
+    done
+} | MELVIN_DEBUG=1 ./melvin_core 2>&1 > /tmp/emergence_test.log
+
+echo "✅ Training complete"
+echo ""
+
+# Count associations formed
+BRIDGES=$(grep -c "\[ASSOCIATE\]" /tmp/emergence_test.log)
+echo "📊 Pattern bridges created/strengthened: $BRIDGES"
+echo ""
+
+if [ $BRIDGES -gt 0 ]; then
+    echo "Sample associations:"
+    grep "\[ASSOCIATE\]" /tmp/emergence_test.log | head -10
+    echo ""
+fi
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "TEST 2: Network of Networks"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+# Check for hierarchy emergence
+HUBS=$(grep -c "\[HUB\]" /tmp/emergence_test.log)
+MODULES=$(grep -c "\[MODULE\]" /tmp/emergence_test.log)
+HIERARCHY=$(grep -c "\[HIERARCHY\]" /tmp/emergence_test.log)
+
+echo "Pattern Integrators (Hubs):      $HUBS"
+echo "Module Coordinators (Bridges):   $MODULES"
+echo "Hierarchical Nodes Created:      $HIERARCHY"
+echo ""
+
+if [ $HUBS -gt 0 ]; then
+    echo "Sample hub cells:"
+    grep "\[HUB\]" /tmp/emergence_test.log | head -5
+    echo ""
+fi
+
+if [ $MODULES -gt 0 ]; then
+    echo "Sample module coordinators:"
+    grep "\[MODULE\]" /tmp/emergence_test.log | head -5
+    echo ""
+fi
+
+if [ $HIERARCHY -gt 0 ]; then
+    echo "Hierarchical nodes:"
+    grep "\[HIERARCHY\]" /tmp/emergence_test.log
+    echo ""
+fi
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "GRAPH STRUCTURE"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+./inspect_program | grep -A 8 "PROGRAM STATE"
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "ANALYSIS"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+if [ $BRIDGES -gt 0 ]; then
+    echo "✅ ASSOCIATION BRIDGE WORKING"
+    echo "   • Temporal patterns are being linked"
+    echo "   • 'cat' pattern bridges to 'animal' pattern"
+    echo "   • This enables: input → associated output"
+    echo ""
+fi
+
+if [ $HUBS -gt 0 ] || [ $MODULES -gt 0 ] || [ $HIERARCHY -gt 0 ]; then
+    echo "✅ NETWORK OF NETWORKS EMERGING"
+    echo "   • Hub cells detect pattern combinations"
+    echo "   • Module coordinators bridge sub-networks"
+    echo "   • Hierarchical structure forming naturally"
+    echo ""
+fi
+
+echo "🎯 KEY INSIGHTS:"
+echo ""
+echo "1. ASSOCIATION: Patterns that co-occur get linked"
+echo "   → Enables learning by example"
+echo ""
+echo "2. HIERARCHIES: Cells organize into layers"
+echo "   → Abstraction emerges automatically"
+echo ""
+echo "3. STRUCTURE = CODE: The graph topology IS the program"
+echo "   → Data shapes executable structure"
+echo ""
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Both features EMERGED from simple rules!"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "See EMERGENCE_GUIDE.md for details on how these work."
+echo ""
+

@@ -1,0 +1,71 @@
+#!/bin/bash
+# Test: 10,000 words of training
+
+echo "🧬 TRAINING: 10,000 Words"
+echo "========================="
+echo ""
+
+rm -f graph.mmap
+
+echo "Generating training data (patterns with variation)..."
+
+# Create 10,000 words with patterns
+{
+    # Teach basic associations (2000 times each)
+    for i in {1..2000}; do
+        echo "cat"
+        echo "dog"
+        echo "bird"
+        echo "fish"
+        echo "tree"
+    done
+} > /tmp/training_10k.txt
+
+WORD_COUNT=$(wc -w < /tmp/training_10k.txt)
+echo "Training data: $WORD_COUNT words"
+echo ""
+
+echo "Training in progress..."
+cat /tmp/training_10k.txt | ./melvin_core 2>&1 > /tmp/training_output.log
+
+echo "✅ Training complete!"
+echo ""
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "GRAPH STATE AFTER TRAINING"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+./inspect_program | head -80
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "TESTING OUTPUT"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+echo "Test 1: What does 'cat' trigger?"
+echo "cat" | ./melvin_core 2>&1
+
+echo ""
+echo "Test 2: What does 'dog' trigger?"
+echo "dog" | ./melvin_core 2>&1
+
+echo ""
+echo "Test 3: What does 'tree' trigger?"
+echo "tree" | ./melvin_core 2>&1
+
+echo ""
+echo "Test 4: Random input to see pattern emergence"
+echo "test input" | ./melvin_core 2>&1
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "ANALYSIS"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "Look for:"
+echo "  • Learned patterns in output"
+echo "  • Associations between words"
+echo "  • Network structure in meta-nodes"
+echo "  • Energy distribution showing what worked"
+echo ""
+
