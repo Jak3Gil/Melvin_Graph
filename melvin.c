@@ -47,8 +47,10 @@ typedef struct {
     uint8_t rule_input_count;
     uint32_t rule_outputs[16];
     uint8_t rule_output_count;
-    float rule_strength;
+    float rule_strength;         // COMPETITION: strength = usage
     uint32_t times_executed;
+    uint32_t inhibit_outputs[8]; // INHIBITION: nodes to suppress
+    uint8_t inhibit_count;
     
     // PATTERN nodes (clusters)
     uint32_t pattern_members[32];
@@ -315,18 +317,26 @@ void execute_rules() {
         }
     }
     
-    // MULTI-HOP with DECAY: Distant activations are weaker!
+    // MULTI-HOP with DECAY + REASONING!
     for (int hop = 0; hop < 5; hop++) {
-        float activation_strength = 1.0f - (hop * 0.2f);  // 1.0, 0.8, 0.6, 0.4, 0.2
+        float activation_strength = 1.0f - (hop * 0.2f);
         if (activation_strength <= 0.0f) break;
         
         int any_fired = 0;
+        
+        // COMPETITION: Calculate rule strengths first
+        for (uint32_t i = 0; i < g.node_count; i++) {
+            Node *rule = &g.nodes[i];
+            if (rule->type != NODE_RULE) continue;
+            // Strength = usage (frequent patterns are stronger)
+            rule->rule_strength = (float)rule->times_executed / (rule->times_executed + 10.0f);
+        }
         
         for (uint32_t i = 0; i < g.node_count; i++) {
             Node *rule = &g.nodes[i];
             if (rule->type != NODE_RULE) continue;
             
-            // Check if all inputs are active with sufficient strength
+            // Check if all inputs are active
             int all_active = 1;
             float min_input_state = 1.0f;
             for (uint8_t j = 0; j < rule->rule_input_count; j++) {
@@ -341,10 +351,14 @@ void execute_rules() {
             }
             
             if (all_active) {
-                // Fire rule: Activate outputs with STRONG DECAY
-                float output_strength = min_input_state * 0.7f;  // 30% decay each hop!
-                if (output_strength < 0.4f) continue;  // Higher threshold = less noise
+                // COMPETITION: Only fire if rule is strong enough
+                if (rule->rule_strength < 0.1f) continue;  // Weak rules blocked!
                 
+                // Fire rule with decay
+                float output_strength = min_input_state * 0.7f;
+                if (output_strength < 0.4f) continue;
+                
+                // EXCITATION: Activate outputs
                 for (uint8_t j = 0; j < rule->rule_output_count; j++) {
                     uint32_t out_id = rule->rule_outputs[j];
                     if (out_id < g.node_count && g.nodes[out_id].state < output_strength) {
@@ -352,11 +366,21 @@ void execute_rules() {
                         any_fired = 1;
                     }
                 }
+                
+                // INHIBITION: Suppress competing nodes!
+                for (uint8_t j = 0; j < rule->inhibit_count; j++) {
+                    uint32_t inh_id = rule->inhibit_outputs[j];
+                    if (inh_id < g.node_count) {
+                        g.nodes[inh_id].state -= output_strength;  // Negative activation!
+                        if (g.nodes[inh_id].state < 0.0f) g.nodes[inh_id].state = 0.0f;
+                    }
+                }
+                
                 rule->times_executed++;
             }
         }
         
-        if (!any_fired) break;  // No more propagation possible
+        if (!any_fired) break;
     }
 }
 
