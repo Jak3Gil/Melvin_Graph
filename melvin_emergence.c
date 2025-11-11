@@ -58,6 +58,12 @@ typedef struct {
     // Output learning: tracks correlation with each byte
     float byte_correlation[256];
     uint8_t learned_output_byte;  // Byte with highest correlation
+    
+    // PREDICTION: Intelligence comes from forecasting!
+    uint8_t predicted_next_byte;     // What byte does this node predict comes next?
+    float prediction_confidence;     // How confident (0.0-1.0)
+    uint32_t predictions_correct;    // Prediction accuracy tracking
+    uint32_t predictions_wrong;
 } Node;
 
 typedef struct {
@@ -81,6 +87,13 @@ typedef struct {
     uint32_t sequence;
     uint8_t byte;
 } ActivationEvent;
+
+typedef struct {
+    uint8_t input[256];
+    uint32_t input_len;
+    uint8_t expected_output[256];
+    uint32_t expected_len;
+} TestCase;
 
 typedef struct {
     uint32_t node_count;
@@ -122,6 +135,10 @@ typedef struct {
     // Activation event log (for recording multiple activations of same node)
     ActivationEvent activation_log[1024];
     uint32_t activation_log_len;
+    
+    // INTELLIGENCE RULE 7: GENERALIZATION TEST
+    TestCase test_cases[10];
+    uint32_t test_case_count;
 } Graph;
 
 Graph g_graph;
@@ -267,6 +284,10 @@ uint32_t node_create() {
     n->out_degree = 0;
     n->is_pattern = 0;
     n->pattern_member_count = 0;
+    n->predicted_next_byte = 0;
+    n->prediction_confidence = 0.0f;
+    n->predictions_correct = 0;
+    n->predictions_wrong = 0;
     
     return idx;
 }
@@ -320,6 +341,137 @@ uint32_t connection_create(uint32_t src, uint32_t dst, float initial_weight) {
     g_graph.nodes[dst].in_degree++;
     
     return idx;
+}
+
+/* ========================================================================
+ * FORWARD DECLARATIONS
+ * ======================================================================== */
+
+void sense_input(const uint8_t *bytes, uint32_t len);
+void propagate();
+
+/* ========================================================================
+ * INTELLIGENCE RULE 7: GENERALIZATION TEST
+ * ======================================================================== */
+
+void test_generalization() {
+    // Test on held-out data every 100 ticks
+    if (g_graph.test_case_count == 0) return;
+    
+    for (uint32_t t = 0; t < g_graph.test_case_count; t++) {
+        // Save current state
+        uint32_t saved_log_len = g_graph.activation_log_len;
+        
+        // Run test input
+        sense_input(g_graph.test_cases[t].input, g_graph.test_cases[t].input_len);
+        
+        // Propagate
+        for (int hop = 0; hop < 5; hop++) {
+            propagate();
+        }
+        
+        // Check if output matches expected
+        uint32_t matches = 0;
+        for (uint32_t i = 0; i < g_graph.activation_log_len && 
+             i < g_graph.test_cases[t].expected_len; i++) {
+            if (g_graph.activation_log[i].byte == g_graph.test_cases[t].expected_output[i]) {
+                matches++;
+            }
+        }
+        
+        float accuracy = (g_graph.test_cases[t].expected_len > 0) ?
+                        (float)matches / (float)g_graph.test_cases[t].expected_len : 0.0f;
+        
+        if (accuracy > 0.8f) {
+            // GENERALIZATION SUCCESS! Massive reward!
+            for (uint32_t i = 21; i < g_graph.node_count; i++) {
+                if (g_graph.nodes[i].state > 0.5f) {
+                    g_graph.nodes[i].energy += 50.0f;
+                }
+            }
+            
+            if (g_debug) {
+                fprintf(stderr, "[GENERALIZE ✓] Test case %u passed (%.0f%% accurate) - HUGE REWARD!\n",
+                        t, accuracy * 100.0f);
+            }
+        }
+        
+        // Restore state
+        g_graph.activation_log_len = saved_log_len;
+    }
+}
+
+/* ========================================================================
+ * INTELLIGENCE RULE 5: PREDICTION
+ * ======================================================================== */
+
+void predict_next() {
+    // Each active node predicts what byte will come next
+    // by looking at its strongest outgoing edge
+    
+    float activation_threshold = (g_graph.node_count > 2) ?
+                                 g_graph.nodes[2].state : 0.5f;
+    
+    for (uint32_t i = 21; i < g_graph.node_count; i++) {
+        Node *node = &g_graph.nodes[i];
+        
+        if (node->state <= activation_threshold) continue;
+        if (node->energy <= 0.0f) continue;
+        
+        // Find strongest outgoing edge
+        float best_weight = 0.0f;
+        uint32_t best_dst = UINT32_MAX;
+        
+        for (uint32_t c = 0; c < g_graph.connection_count; c++) {
+            Connection *conn = &g_graph.connections[c];
+            if (conn->src == i && conn->weight > best_weight) {
+                best_weight = conn->weight;
+                best_dst = conn->dst;
+            }
+        }
+        
+        // Make prediction
+        if (best_dst != UINT32_MAX && best_dst < g_graph.node_count) {
+            node->predicted_next_byte = g_graph.nodes[best_dst].learned_output_byte;
+            node->prediction_confidence = best_weight / 10.0f;
+        }
+    }
+}
+
+void validate_predictions(uint8_t actual_byte) {
+    // Check all predictions against actual input
+    // REWARD accurate predictions (intelligence!)
+    
+    for (uint32_t i = 21; i < g_graph.node_count; i++) {
+        Node *node = &g_graph.nodes[i];
+        
+        if (node->prediction_confidence <= 0.0f) continue;
+        
+        if (node->predicted_next_byte == actual_byte) {
+            // CORRECT PREDICTION! This is intelligence!
+            node->predictions_correct++;
+            float reward = 10.0f * node->prediction_confidence;
+            node->energy += reward;
+            
+            if (g_debug && g_graph.tick % 50 == 0) {
+                fprintf(stderr, "[PREDICT ✓] Node %u predicted '%c' correctly! (+%.1f energy)\n",
+                        i, actual_byte, reward);
+            }
+        } else {
+            // Wrong prediction - penalize
+            node->predictions_wrong++;
+            float penalty = 2.0f * node->prediction_confidence;
+            node->energy -= penalty;
+            
+            if (g_debug && g_graph.tick % 50 == 0 && node->prediction_confidence > 0.8f) {
+                fprintf(stderr, "[PREDICT ✗] Node %u predicted '%c' but got '%c' (-%1f energy)\n",
+                        i, node->predicted_next_byte, actual_byte, penalty);
+            }
+        }
+        
+        // Reset prediction
+        node->prediction_confidence = 0.0f;
+    }
 }
 
 /* ========================================================================
@@ -465,6 +617,11 @@ void detect_patterns() {
                     // Pattern node can also output its sequence
                     pnode->learned_output_byte = g_graph.nodes[chain[0]].learned_output_byte;
                     
+                    // INTELLIGENCE RULE 6: COMPRESSION REWARD!
+                    float compression_ratio = (float)chain_len;
+                    float compression_reward = compression_ratio * 20.0f;
+                    pnode->energy += compression_reward;
+                    
                     if (g_debug) {
                         fprintf(stderr, "[PATTERN] Created node %u for %u-node sequence (avg_weight=%.1f)\n",
                                 pattern_node, chain_len, avg_weight);
@@ -475,6 +632,8 @@ void detect_patterns() {
                         }
                         if (chain_len > 5) fprintf(stderr, "...");
                         fprintf(stderr, "\n");
+                        fprintf(stderr, "  [COMPRESSION] %u→1 = %.0fx compression (+%.1f energy)\n",
+                                chain_len, compression_ratio, compression_reward);
                     }
                 }
             }
@@ -815,11 +974,14 @@ void learn() {
  * ======================================================================== */
 
 int validate_output_completeness() {
-    // Check if all RULES were satisfied
+    // INTELLIGENCE RULE 8: VERIFICATION
+    // Multi-stage validation of output quality
+    
     uint32_t rule_count = 0;
     uint32_t satisfied_count = 0;
     uint32_t violated_count = 0;
     
+    // CHECK 1: Are sequential rules satisfied?
     for (uint32_t i = 0; i < g_graph.connection_count; i++) {
         Connection *c = &g_graph.connections[i];
         
@@ -842,12 +1004,44 @@ int validate_output_completeness() {
         }
     }
     
-    // Pattern is complete if NO rules violated
-    if (violated_count > 0) {
-        return 0;  // FAIL - rules broken
+    // CHECK 2: Is pattern complete (not cut off mid-sequence)?
+    int pattern_started = 0;
+    int pattern_completed = 0;
+    
+    for (uint32_t i = 0; i < g_graph.activation_log_len; i++) {
+        uint32_t node_id = g_graph.activation_log[i].node_id;
+        if (node_id >= g_graph.node_count) continue;
+        
+        // Check if this node starts a pattern
+        if (g_graph.nodes[node_id].out_degree > 2) {
+            pattern_started = 1;
+        }
+        
+        // Check if pattern reaches an end node
+        if (g_graph.nodes[node_id].out_degree == 0 || 
+            g_graph.nodes[node_id].out_degree == 1) {
+            pattern_completed = 1;
+        }
     }
     
-    // And most rules satisfied
+    // CHECK 3: Self-consistency (no contradictory activations)
+    int has_conflicts = 0;
+    for (uint32_t i = 0; i < g_graph.activation_log_len; i++) {
+        for (uint32_t j = i + 1; j < g_graph.activation_log_len; j++) {
+            if (g_graph.activation_log[i].node_id == g_graph.activation_log[j].node_id) {
+                // Same node activated twice - check if bytes match
+                if (g_graph.activation_log[i].byte != g_graph.activation_log[j].byte) {
+                    has_conflicts = 1;  // Contradiction!
+                }
+            }
+        }
+    }
+    
+    // OVERALL VALIDATION
+    if (violated_count > 0) return 0;  // Rule violations
+    if (pattern_started && !pattern_completed) return 0;  // Incomplete
+    if (has_conflicts) return 0;  // Contradictions
+    
     float completeness = (rule_count > 0) ? 
                          (float)satisfied_count / (float)rule_count : 1.0f;
     
@@ -1127,7 +1321,20 @@ int main(int argc, char **argv) {
         ssize_t n = read(STDIN_FILENO, input_buffer, sizeof(input_buffer));
         
         if (n > 0) {
-            sense_input(input_buffer, n);
+            // INTELLIGENCE: Predict before seeing (Rule 5)
+            predict_next();
+            
+            // Process input byte-by-byte for prediction validation
+            for (ssize_t b = 0; b < n; b++) {
+                uint8_t byte = input_buffer[b];
+                
+                // Validate predictions (Rule 5)
+                validate_predictions(byte);
+                
+                // Process this byte
+                sense_input(&byte, 1);
+            }
+            
             idle_ticks = 0;
         } else {
             idle_ticks++;
@@ -1150,6 +1357,9 @@ int main(int argc, char **argv) {
         
         if (g_graph.tick % 100 == 0 && g_graph.tick > 0) {
             detect_patterns();
+            
+            // INTELLIGENCE RULE 7: Test generalization
+            test_generalization();
         }
         
         g_graph.tick++;
