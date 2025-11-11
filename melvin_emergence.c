@@ -233,6 +233,12 @@ void mmap_init(const char *filename) {
     g_graph.nodes = (Node *)((char *)g_mmap_base + header_size);
     g_graph.connections = (Connection *)((char *)g_graph.nodes + 
                                          header->node_cap * sizeof(Node));
+    
+    if (g_debug) {
+        fprintf(stderr, "[MMAP] Node size: %zu, Node offset: %zu, Conn offset: %zu\n",
+                sizeof(Node), header_size, 
+                (size_t)((char*)g_graph.connections - (char*)g_mmap_base));
+    }
 }
 
 void mmap_sync() {
@@ -339,6 +345,12 @@ uint32_t connection_create(uint32_t src, uint32_t dst, float initial_weight) {
     c->times_violated = 0;
     c->is_implication = 1;  // Default: src → dst (IF-THEN)
     c->is_inhibitory = 0;
+    
+    // DEBUG: Verify write
+    if (g_debug && (c->src != src || c->dst != dst)) {
+        fprintf(stderr, "[ERROR] Connection write failed! Expected %u→%u, got %u→%u\n",
+                src, dst, c->src, c->dst);
+    }
     
     // Update node degrees
     g_graph.nodes[src].out_degree++;
@@ -909,6 +921,11 @@ void propagate() {
             signal = src->state * c->weight * 0.1f;
             if (src->is_hub) signal *= 1.5f;  // Hub boost!
             dst->state += signal;
+            
+            if (g_debug && signal > 0.1f) {
+                fprintf(stderr, "[PROPAGATE] %u → %u (signal=%.2f, dst_state=%.2f)\n",
+                        c->src, c->dst, signal, dst->state);
+            }
         }
         
         // If dst crosses threshold, LOG IT (for output!)
@@ -1120,6 +1137,11 @@ void emit_output() {
     for (uint32_t i = 21; i < g_graph.node_count && candidate_count < 256; i++) {
         Node *node = &g_graph.nodes[i];
         
+        if (g_debug && node->state > 0.5f && node->token_len > 0) {
+            fprintf(stderr, "[CANDIDATE?] Node %u state=%.2f energy=%.1f token_len=%u\n",
+                    i, node->state, node->energy, node->token_len);
+        }
+        
         if (node->state <= output_threshold) continue;
         if (node->energy <= output_cost) continue;
         if (node->token_len == 0) continue;
@@ -1140,53 +1162,49 @@ void emit_output() {
         }
     }
     
-    // Select BEST non-overlapping tokens (greedy longest-first)
-    uint8_t used_positions[256] = {0};  // Track which input positions are covered
-    
-    for (uint32_t i = 0; i < candidate_count && i < 20; i++) {
+    // Output ONLY word-level tokens (length >= 2), skip sub-ngrams
+    for (uint32_t i = 0; i < candidate_count && output_len < 1020; i++) {
         uint32_t node_id = candidates[i].node_id;
         Node *node = &g_graph.nodes[node_id];
         
-        // Check if this token overlaps with already-selected tokens
-        int overlaps = 0;
+        // Only output complete words (2+ chars)
+        if (node->token_len < 2) continue;
         
-        // Find this token in current input
-        for (uint32_t p = 0; p + node->token_len <= g_graph.current_input_len; p++) {
-            int matches = 1;
-            for (uint32_t b = 0; b < node->token_len; b++) {
-                if (g_graph.current_input[p + b] != node->token[b]) {
-                    matches = 0;
-                    break;
-                }
-            }
-            
-            if (matches) {
-                // Check if any position is already used
-                for (uint32_t b = 0; b < node->token_len; b++) {
-                    if (used_positions[p + b]) {
-                        overlaps = 1;
+        // Skip if this is a substring of a higher-ranked candidate
+        int is_substring = 0;
+        for (uint32_t j = 0; j < i; j++) {
+            Node *other = &g_graph.nodes[candidates[j].node_id];
+            if (other->token_len > node->token_len) {
+                // Check if node's token is substring of other's token
+                for (uint32_t offset = 0; offset + node->token_len <= other->token_len; offset++) {
+                    int matches = 1;
+                    for (uint32_t b = 0; b < node->token_len; b++) {
+                        if (node->token[b] != other->token[offset + b]) {
+                            matches = 0;
+                            break;
+                        }
+                    }
+                    if (matches) {
+                        is_substring = 1;
                         break;
                     }
                 }
-                
-                // If no overlap, use this token!
-                if (!overlaps) {
-                    // Output entire token
-                    for (uint32_t b = 0; b < node->token_len && output_len < 1024; b++) {
-                        output_buffer[output_len++] = node->token[b];
-                        used_positions[p + b] = 1;  // Mark as used
-                    }
-                    
-                    // Energy cost
-                    node->energy -= output_cost * node->token_len * 0.1f;
-                    
-                    // Reward for correct output
-                    node->energy += 2.0f * node->token_len;
-                    
-                    break;  // Found position for this token
-                }
             }
+            if (is_substring) break;
         }
+        
+        if (is_substring) continue;
+        
+        // Output token
+        for (uint32_t b = 0; b < node->token_len && output_len < 1024; b++) {
+            output_buffer[output_len++] = node->token[b];
+        }
+        
+        // Space between words
+        if (output_len < 1023) output_buffer[output_len++] = ' ';
+        
+        node->energy -= output_cost * 0.1f;
+        node->energy += 1.0f;
     }
     
     // VALIDATE OUTPUT BEFORE EMITTING
