@@ -250,13 +250,6 @@ void generalize_rules() {
             
             float similarity = token_similarity(&g.nodes[inp], &g.nodes[sim]);
             
-            if (debug && similarity > 0.0f) {
-                printf("[SIM] Node %u ('%.*s') vs %u ('%.*s'): %.2f (threshold %.2f)\n",
-                       inp, g.nodes[inp].token_len, g.nodes[inp].token,
-                       sim, g.nodes[sim].token_len, g.nodes[sim].token,
-                       similarity, g.similarity_threshold);
-            }
-            
             if (similarity > g.similarity_threshold) {
                 // Find rule for similar node
                 for (uint32_t r = 0; r < g.node_count; r++) {
@@ -271,9 +264,11 @@ void generalize_rules() {
                                                           rule->rule_outputs, 
                                                           rule->rule_output_count);
                     
-                    if (debug && new_rule != UINT32_MAX) {
-                        printf("[GENERALIZE] %u→%u (via similarity to %u)\n", 
-                               inp, rule->rule_outputs[0], sim);
+                    if (debug) {
+                        fprintf(stderr, "[GENERALIZE] %u ('%.*s') → %u (via %.2f sim to '%.*s')\n", 
+                               inp, g.nodes[inp].token_len, g.nodes[inp].token,
+                               rule->rule_outputs[0], similarity,
+                               g.nodes[sim].token_len, g.nodes[sim].token);
                     }
                     
                     return;
@@ -459,9 +454,11 @@ int main() {
         if (debug) printf("[LOAD] %u nodes\n", g.node_count);
     } else {
         g.node_count = 0;
-        g.learning_rate = 0.1f;
-        g.similarity_threshold = 0.5f;
     }
+    
+    // ALWAYS initialize these (they're not persisted in mmap)
+    g.learning_rate = 0.1f;
+    g.similarity_threshold = 0.5f;  // FIXED: was 0.0 on reload!
     
     fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
     
