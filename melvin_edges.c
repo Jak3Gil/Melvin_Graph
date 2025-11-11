@@ -62,6 +62,7 @@ int debug = 0;
 
 /* Find or create node */
 uint32_t find_or_create(uint8_t *token, uint32_t len) {
+    // Try to REUSE existing
     for (uint32_t i = 0; i < g.node_count; i++) {
         if (g.nodes[i].token_len == len) {
             int match = 1;
@@ -71,10 +72,20 @@ uint32_t find_or_create(uint8_t *token, uint32_t len) {
                     break;
                 }
             }
-            if (match) return i;
+            if (match) {
+                if (debug) {
+                    printf("[REUSE] Node %u: \"", i);
+                    for (uint32_t b = 0; b < len && b < 10; b++) {
+                        printf("%c", token[b]);
+                    }
+                    printf("\"\n");
+                }
+                return i;
+            }
         }
     }
     
+    // CREATE new
     if (g.node_count >= g.node_cap) return UINT32_MAX;
     
     uint32_t id = g.node_count++;
@@ -84,6 +95,15 @@ uint32_t find_or_create(uint8_t *token, uint32_t len) {
         g.nodes[id].token[b] = token[b];
     }
     g.nodes[id].energy = 100.0f;
+    
+    if (debug) {
+        printf("[CREATE] Node %u: \"", id);
+        for (uint32_t b = 0; b < len && b < 10; b++) {
+            printf("%c", token[b]);
+        }
+        printf("\"\n");
+    }
+    
     return id;
 }
 
@@ -261,13 +281,38 @@ int main() {
     g.node_cap = 1000;
     g.connection_cap = 10000;
     
-    size_t size = sizeof(Node) * g.node_cap + sizeof(Connection) * g.connection_cap;
+    size_t header_size = sizeof(uint32_t) * 2;  // node_count, conn_count
+    size_t size = header_size + sizeof(Node) * g.node_cap + sizeof(Connection) * g.connection_cap;
+    
     int fd = open("graph_edges.mmap", O_RDWR | O_CREAT, 0644);
-    ftruncate(fd, size);
+    struct stat st;
+    int exists = (fstat(fd, &st) == 0 && st.st_size > 0);
+    
+    if (!exists) {
+        ftruncate(fd, size);
+    }
+    
     mmap_base = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     
-    g.nodes = (Node *)mmap_base;
-    g.connections = (Connection *)((char *)mmap_base + g.node_cap * sizeof(Node));
+    uint32_t *header = (uint32_t *)mmap_base;
+    g.nodes = (Node *)((char *)mmap_base + header_size);
+    g.connections = (Connection *)((char *)g.nodes + g.node_cap * sizeof(Node));
+    
+    if (exists && header[0] > 0) {
+        // RESTORE from disk
+        g.node_count = header[0];
+        g.connection_count = header[1];
+        if (debug) {
+            printf("[RESTORE] Loaded %u nodes, %u edges\n", g.node_count, g.connection_count);
+        }
+    } else {
+        // Fresh start
+        g.node_count = 0;
+        g.connection_count = 0;
+        header[0] = 0;
+        header[1] = 0;
+    }
+    
     g.last_word_node = UINT32_MAX;
     
     fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
@@ -290,9 +335,19 @@ int main() {
         emit_output();
     }
     
+    // Save state
+    uint32_t *header = (uint32_t *)mmap_base;
+    header[0] = g.node_count;
+    header[1] = g.connection_count;
+    
     msync(mmap_base, size, MS_SYNC);
     munmap(mmap_base, size);
     close(fd);
+    
+    if (debug) {
+        printf("[SAVED] %u nodes, %u edges\n", g.node_count, g.connection_count);
+    }
+    
     return 0;
 }
 
