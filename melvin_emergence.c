@@ -1514,9 +1514,11 @@ int main(int argc, char **argv) {
     memset(&g_graph, 0, sizeof(Graph));
     mmap_init("graph_emergence.mmap");
     
-    // Bootstrap meta-nodes if starting fresh
+    // Initialize dynamic parameters
     if (g_graph.node_count == 0) {
-        bootstrap_meta_nodes();
+        g_graph.learning_rate = 0.1f;
+        g_graph.decay_rate = 0.95f;
+        g_graph.metabolism = 0.1f;
     }
     
     if (g_debug) {
@@ -1536,17 +1538,8 @@ int main(int argc, char **argv) {
         ssize_t n = read(STDIN_FILENO, input_buffer, sizeof(input_buffer));
         
         if (n > 0) {
-            // INTELLIGENCE: Predict before seeing (Rule 5)
-            predict_next();
-            
             // Process FULL input (for n-gram tokenization!)
             sense_input(input_buffer, n);
-            
-            // Validate predictions byte-by-byte (Rule 5)
-            for (ssize_t b = 0; b < n; b++) {
-                validate_predictions(input_buffer[b]);
-            }
-            
             idle_ticks = 0;
         } else {
             idle_ticks++;
@@ -1566,15 +1559,7 @@ int main(int argc, char **argv) {
         mutate();
         reproduce();
         
-        // NETWORK OF NETWORKS: Detect hubs and patterns periodically
-        if (g_graph.tick % 50 == 0 && g_graph.tick > 0) {
-            detect_hubs();
-        }
-        
-        if (g_graph.tick % 100 == 0 && g_graph.tick > 0) {
-            detect_patterns();
-            test_generalization();
-        }
+        // Removed: hub/pattern detection (unnecessary complexity)
         
         g_graph.tick++;
         

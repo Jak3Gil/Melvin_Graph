@@ -1,0 +1,30 @@
+# WHAT TO REMOVE vs MAKE DYNAMIC
+
+## REMOVE (Unnecessary complexity):
+✗ Meta-nodes (21 nodes for parameters) - just use variables
+✗ Hub detection (detect_hubs) - over-engineering
+✗ Pattern detection (detect_patterns) - over-engineering  
+✗ Pattern members array[16] - not using
+✗ Test cases system - not needed for core
+✗ Prediction tracking - removed (no prediction!)
+✗ Validation functions - too complex
+✗ Magic number thresholds - should emerge
+
+## MAKE DYNAMIC (Grow as needed):
+✓ node_cap (currently 10,000) → grow on demand
+✓ connection_cap (currently 100,000) → grow on demand
+✓ token[16] → token[64] or unlimited
+✓ ngram_len (currently ≤10) → adaptive
+✓ propagation hops (currently 5) → until stable
+✓ recent_active (currently 10) → dynamic window
+
+## KEEP MINIMAL:
+✓ Nodes (token + state)
+✓ Connections (src, dst, weight)
+✓ Energy system
+✓ Input → create/reuse nodes
+✓ Sequential wiring
+✓ Hebbian learning (co-activation strengthens)
+✓ Output by following rules
+
+RESULT: Much simpler, more dynamic system!

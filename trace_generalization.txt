@@ -1,0 +1,62 @@
+# HOW DOES GENERALIZATION EMERGE?
+
+## Current Rules (Minimal):
+
+1. CREATE nodes for data (n-grams)
+2. CONNECT sequential nodes (Hebbian: fire together → wire together)
+3. STRENGTHEN connections when co-active (weight++)
+
+## Example Trace:
+
+### Input 1: "cat sat"
+```
+Creates: cat(26), sat(29)
+Connects: 26→29 (weight=1.0)
+```
+
+### Input 2: "dog sat"  
+```
+Creates: dog(35)
+REUSES: sat(29) ← SAME NODE!
+Connects: 35→29 (weight=1.0)
+```
+
+### Result:
+```
+Node 29 ("sat") now has:
+  - in_degree = 2 (connected from cat AND dog)
+  - frequency = 2 (used twice)
+  
+Connections:
+  26→29 (cat→sat)
+  35→29 (dog→sat)
+```
+
+## GENERALIZATION EMERGED!
+
+"sat" is now a GENERAL pattern that works after both "cat" and "dog"!
+
+Nobody programmed this. It emerged from:
+- Reusing the "sat" node (not creating a new one)
+- Connecting from different sources (cat, dog)
+
+## The Minimal Rules That Breed Generalization:
+
+1. **REUSE before CREATE**
+   - If token exists, reuse it
+   - This makes same pattern appear in multiple contexts
+
+2. **CONNECT sequentially**
+   - Wire nodes that appear together
+   - This creates multiple paths to same node
+
+3. **STRENGTHEN with use**
+   - Frequently used connections get stronger
+   - This makes general patterns survive longer
+
+That's it! Just 3 rules → generalization emerges!
+
+## The Question:
+
+Are these the RIGHT minimal rules?
+Or is there an even simpler set?
