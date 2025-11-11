@@ -184,6 +184,11 @@ void execute_rules() {
 
 /* Process input - creates DATA nodes AND RULE nodes! */
 void sense_input(uint8_t *bytes, uint32_t len) {
+    // CLEAR all previous state first!
+    for (uint32_t i = 0; i < g.node_count; i++) {
+        g.nodes[i].state = 0.0f;
+    }
+    
     uint32_t word_nodes[128];
     uint32_t word_count = 0;
     uint32_t word_start = 0;
@@ -197,7 +202,7 @@ void sense_input(uint8_t *bytes, uint32_t len) {
                 uint32_t node_id = create_data_node(&bytes[word_start], i - word_start);
                 if (node_id != UINT32_MAX) {
                     word_nodes[word_count++] = node_id;
-                    g.nodes[node_id].state = 1.0f;
+                    g.nodes[node_id].state = 1.0f;  // Fresh activation for THIS input
                 }
             }
             word_start = i + 1;
