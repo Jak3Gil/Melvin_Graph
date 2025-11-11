@@ -148,6 +148,11 @@ typedef struct {
     // THE FUNDAMENTAL INTELLIGENCE METRIC
     uint32_t patterns_reused;   // Used existing pattern for new data
     uint32_t patterns_created;  // Had to create new pattern
+    
+    // DYNAMIC PARAMETERS (adapt, not hardcoded!)
+    float learning_rate;
+    float decay_rate;
+    float metabolism;
 } Graph;
 
 Graph g_graph;
