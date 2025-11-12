@@ -354,15 +354,15 @@ void sense_input(uint8_t *bytes, uint32_t len) {
             edges_created++;
         }
         
-        // 2. SIMILARITY EDGES: Connect to similar existing words
-        // Pre-calculate similarities to avoid accessing g.nodes during create_edge
+        // 2. CONTEXT-AWARE SIMILARITY: Only check active nodes (not entire graph!)
         for (uint32_t j = 0; j < snapshot_node_count && edges_created < 100; j++) {
             if (j == current_id) continue;
             
-            // Reload pointers (may have changed due to auto-grow)
-            Node *current = &g.nodes[current_id];
             Node *other = &g.nodes[j];
+            // SKIP inactive nodes - they're not in current context!
+            if (other->activation < 0.01f && j < snapshot_node_count - word_count) continue;
             
+            Node *current = &g.nodes[current_id];
             float sim = token_similarity(current, other);
             
             if (sim > 0.3f) {
@@ -377,6 +377,50 @@ void sense_input(uint8_t *bytes, uint32_t len) {
                    current_id, edges_created);
         }
     }
+}
+
+/* ========================================================================
+ * COHERENCE MEASUREMENT: How well do active nodes fit together?
+ * ======================================================================== */
+
+float measure_coherence() {
+    // Count active nodes and edges between them
+    uint32_t active_nodes = 0;
+    uint32_t edges_between_active = 0;
+    uint32_t total_weight = 0;
+    
+    for (uint32_t i = 0; i < g.node_count; i++) {
+        if (g.nodes[i].activation > 0.1f) active_nodes++;
+    }
+    
+    if (active_nodes < 2) return 1.0f;  // Perfect coherence if only 1 node
+    
+    // Check edges between active nodes
+    for (uint32_t e = 0; e < g.edge_count; e++) {
+        Edge *edge = &g.edges[e];
+        if (edge->from >= g.node_count || edge->to >= g.node_count) continue;
+        
+        Node *from = &g.nodes[edge->from];
+        Node *to = &g.nodes[edge->to];
+        
+        if (from->activation > 0.1f && to->activation > 0.1f) {
+            edges_between_active++;
+            total_weight += edge->weight;  // Weight by edge strength
+        }
+    }
+    
+    // Coherence = how connected are the active nodes?
+    uint32_t max_possible_edges = active_nodes * (active_nodes - 1) / 2;
+    float connectivity = (max_possible_edges > 0) ? 
+                        (float)edges_between_active / (float)max_possible_edges : 0.0f;
+    
+    // Boost by edge strength
+    float strength_boost = (edges_between_active > 0) ?
+                          (float)total_weight / (float)edges_between_active / 255.0f : 0.0f;
+    
+    float coherence = connectivity * 0.7f + strength_boost * 0.3f;
+    
+    return coherence;
 }
 
 /* ========================================================================
@@ -519,10 +563,28 @@ void spreading_activation() {
         if (debug) fprintf(stderr, "[ADJUST] No cascade, reducing decay\n");
     }
     
+    // MEASURE COHERENCE: Store in graph for feedback loop
+    float coherence = measure_coherence();
+    
+    // Store coherence as activation in a node (graph state!)
+    uint32_t coherence_node = get_control_node("_coherence", coherence);
+    g.nodes[coherence_node].activation = coherence;
+    
+    // COHERENCE-DRIVEN ADAPTATION
+    if (coherence < 0.3f && g.tick > 10) {
+        // Low coherence = random activations, need more specificity
+        adjust_param("_decay", -0.05f);  // Less spreading
+        if (debug) fprintf(stderr, "[ADAPT] Low coherence (%.2f), reducing spread\n", coherence);
+    } else if (coherence > 0.8f && final_active < initial_active + 3) {
+        // High coherence but no cascade = too constrained
+        adjust_param("_decay", +0.02f);  // More spreading
+        if (debug) fprintf(stderr, "[ADAPT] High coherence (%.2f) but no cascade, increasing spread\n", coherence);
+    }
+    
     if (debug) {
-        fprintf(stderr, "[SPREAD] %u iters, %u→%u nodes, %u sat (%.1f%%)\n",
+        fprintf(stderr, "[SPREAD] %u iters, %u→%u nodes, %u sat (%.1f%%), coherence=%.2f\n",
                iterations, initial_active, final_active, 
-               saturated_count, saturation_ratio * 100.0f);
+               saturated_count, saturation_ratio * 100.0f, coherence);
         fprintf(stderr, "[PARAMS] decay=%.3f sat=%.1f\n", decay, saturation);
     }
 }
