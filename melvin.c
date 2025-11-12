@@ -166,9 +166,10 @@ void graph_mmap_grow(uint32_t new_node_cap, uint32_t new_edge_cap) {
     uint32_t saved_node_count = g.node_count;
     uint32_t saved_edge_count = g.edge_count;
     
-    size_t node_section = sizeof(uint32_t) * 4 + (size_t)new_node_cap * sizeof(Node);
-    size_t edge_section = (size_t)new_edge_cap * sizeof(Edge);
-    size_t new_size = node_section + edge_section;
+    size_t header_size = sizeof(uint32_t) * 4;
+    size_t node_array_size = (size_t)new_node_cap * sizeof(Node);
+    size_t edge_array_size = (size_t)new_edge_cap * sizeof(Edge);
+    size_t new_size = header_size + node_array_size + edge_array_size;
     
     munmap(mmap_base, mmap_size);
     
@@ -195,9 +196,9 @@ void graph_mmap_grow(uint32_t new_node_cap, uint32_t new_edge_cap) {
     g.node_cap = new_node_cap;
     g.edge_cap = new_edge_cap;
     
-    // Update pointers after remap
-    g.nodes = (Node *)((char *)mmap_base + sizeof(uint32_t) * 4);
-    g.edges = (Edge *)((char *)mmap_base + node_section);
+    // Update pointers after remap (use correct offsets!)
+    g.nodes = (Node *)((char *)mmap_base + header_size);
+    g.edges = (Edge *)((char *)mmap_base + header_size + node_array_size);
 }
 
 /* ========================================================================
@@ -380,6 +381,95 @@ void sense_input(uint8_t *bytes, uint32_t len) {
 }
 
 /* ========================================================================
+ * SELF-OPTIMIZATION: Graph fixes its own problems!
+ * ======================================================================== */
+
+void prune_weak_edges() {
+    // Graph detects and removes edges that never contribute
+    uint32_t pruned = 0;
+    uint32_t total_weight_before = 0;
+    uint32_t total_weight_after = 0;
+    
+    for (uint32_t e = 0; e < g.edge_count; e++) {
+        total_weight_before += g.edges[e].weight;
+    }
+    
+    // Prune edges with very low weight (created but never strengthened)
+    for (uint32_t e = 0; e < g.edge_count; e++) {
+        Edge *edge = &g.edges[e];
+        
+        // If edge has very low weight and was created a while ago, it's not useful
+        if (edge->weight < 32 && g.tick > 10) {  // Weight < 32 = weak edge
+            edge->weight = (uint8_t)(edge->weight * 0.9f);  // Decay weak edges
+            if (edge->weight < 10) {
+                edge->weight = 0;  // Mark for deletion
+                pruned++;
+            }
+        }
+        
+        total_weight_after += edge->weight;
+    }
+    
+    if (debug && pruned > 0) {
+        fprintf(stderr, "[PRUNE] Removed %u weak edges (%.1f%% of total)\n",
+               pruned, 100.0f * pruned / g.edge_count);
+    }
+}
+
+void strengthen_active_edges() {
+    // Graph reinforces edges that contribute to coherent patterns
+    uint32_t strengthened = 0;
+    
+    for (uint32_t e = 0; e < g.edge_count; e++) {
+        Edge *edge = &g.edges[e];
+        if (edge->from >= g.node_count || edge->to >= g.node_count) continue;
+        
+        Node *from = &g.nodes[edge->from];
+        Node *to = &g.nodes[edge->to];
+        
+        // If both nodes currently active, this edge is useful!
+        if (from->activation > 0.1f && to->activation > 0.1f) {
+            if (edge->weight < 255) {
+                edge->weight++;  // Strengthen useful edges
+                strengthened++;
+            }
+        }
+    }
+    
+    if (debug && strengthened > 0) {
+        fprintf(stderr, "[STRENGTHEN] Boosted %u active edges\n", strengthened);
+    }
+}
+
+void compact_edges() {
+    // Remove deleted edges (weight=0) and rebuild
+    uint32_t write_idx = 0;
+    
+    for (uint32_t read_idx = 0; read_idx < g.edge_count; read_idx++) {
+        if (g.edges[read_idx].weight > 0) {
+            if (write_idx != read_idx) {
+                g.edges[write_idx] = g.edges[read_idx];
+            }
+            write_idx++;
+        }
+    }
+    
+    uint32_t deleted = g.edge_count - write_idx;
+    g.edge_count = write_idx;
+    
+    // Rebuild hash table
+    memset(g.edge_hash, 0, g.edge_hash_size * sizeof(EdgeHashEntry));
+    for (uint32_t i = 0; i < g.edge_count; i++) {
+        edge_hash_insert(i);
+    }
+    
+    if (debug) {
+        fprintf(stderr, "[COMPACT] Removed %u deleted edges, %u remain\n", 
+               deleted, g.edge_count);
+    }
+}
+
+/* ========================================================================
  * COHERENCE MEASUREMENT: How well do active nodes fit together?
  * ======================================================================== */
 
@@ -475,15 +565,13 @@ void adjust_param(const char *name, float delta) {
  * ======================================================================== */
 
 void spreading_activation() {
-    if (debug) fprintf(stderr, "[SPREAD] Starting propagation...\n");
-    
-    // READ ALL PARAMETERS FROM GRAPH
-    float decay = read_param("_decay", 0.9f);
-    float saturation = read_param("_saturation", 5.0f);
-    float max_iters = read_param("_max_iterations", 50.0f);
-    float convergence_threshold = read_param("_convergence_threshold", 0.001f);
-    float input_threshold = read_param("_input_threshold", 0.99f);
-    float active_threshold = read_param("_active_threshold", 0.001f);
+    // Use fixed parameters for now (will add graph-controlled later)
+    float decay = 0.8f;
+    float saturation = 10.0f;
+    float max_iters = 10.0f;
+    float convergence_threshold = 0.001f;
+    float input_threshold = 0.99f;
+    float active_threshold = 0.01f;
     
     // Count initial active (using graph threshold)
     uint32_t initial_active = 0;
@@ -496,20 +584,28 @@ void spreading_activation() {
     uint32_t saturated_count = 0;
     int converged = 0;
     
+    // Allocate activation buffer dynamically (only for current node count)
+    float *new_act = calloc(g.node_count, sizeof(float));
+    if (!new_act) {
+        fprintf(stderr, "[ERROR] Out of memory for activation buffer\n");
+        return;
+    }
+    
     while (iterations < (uint32_t)max_iters) {
         iterations++;
         float max_change = 0.0f;
         saturated_count = 0;
         
-        float *new_act = calloc(g.node_count, sizeof(float));
-        
-        for (uint32_t i = 0; i < g.node_count; i++) {
+        // Copy current activations
+        for (uint32_t i = 0; i < g.node_count && i < 10000000; i++) {
             new_act[i] = g.nodes[i].activation;
         }
         
         // Spread through edges
         for (uint32_t e = 0; e < g.edge_count; e++) {
             Edge *edge = &g.edges[e];
+            if (edge->to >= g.node_count) continue;
+            
             Node *from = &g.nodes[edge->from];
             
             if (from->activation > 0.0f) {
@@ -518,7 +614,7 @@ void spreading_activation() {
             }
         }
         
-        // Apply saturation
+        // Apply saturation and update
         for (uint32_t i = 0; i < g.node_count; i++) {
             if (new_act[i] > saturation) {
                 new_act[i] = saturation;
@@ -530,8 +626,6 @@ void spreading_activation() {
             
             g.nodes[i].activation = new_act[i];
         }
-        
-        free(new_act);
         
         // Check convergence (using graph threshold)
         if (max_change < convergence_threshold) {
@@ -546,47 +640,15 @@ void spreading_activation() {
         if (g.nodes[i].activation > active_threshold) final_active++;
     }
     
-    // MINIMAL SELF-ADJUSTMENT - just detect problems, don't force solutions
-    // Let the graph figure out the right adjustments through structure
-    
     float saturation_ratio = (float)saturated_count / (float)g.node_count;
     
-    if (saturation_ratio > 0.5f && decay < 1.0f) {
-        // Too much saturation - try reducing decay slightly
-        adjust_param("_decay", -0.01f);
-        if (debug) fprintf(stderr, "[ADJUST] High saturation, reducing decay\n");
-    }
-    
-    if (final_active <= initial_active && decay > 0.5f) {
-        // No cascade - try reducing decay to spread more
-        adjust_param("_decay", -0.02f);
-        if (debug) fprintf(stderr, "[ADJUST] No cascade, reducing decay\n");
-    }
-    
-    // MEASURE COHERENCE: Store in graph for feedback loop
-    float coherence = measure_coherence();
-    
-    // Store coherence as activation in a node (graph state!)
-    uint32_t coherence_node = get_control_node("_coherence", coherence);
-    g.nodes[coherence_node].activation = coherence;
-    
-    // COHERENCE-DRIVEN ADAPTATION
-    if (coherence < 0.3f && g.tick > 10) {
-        // Low coherence = random activations, need more specificity
-        adjust_param("_decay", -0.05f);  // Less spreading
-        if (debug) fprintf(stderr, "[ADAPT] Low coherence (%.2f), reducing spread\n", coherence);
-    } else if (coherence > 0.8f && final_active < initial_active + 3) {
-        // High coherence but no cascade = too constrained
-        adjust_param("_decay", +0.02f);  // More spreading
-        if (debug) fprintf(stderr, "[ADAPT] High coherence (%.2f) but no cascade, increasing spread\n", coherence);
-    }
-    
     if (debug) {
-        fprintf(stderr, "[SPREAD] %u iters, %u→%u nodes, %u sat (%.1f%%), coherence=%.2f\n",
+        fprintf(stderr, "[SPREAD] %u iters, %u→%u nodes, %u sat (%.1f%%)\n",
                iterations, initial_active, final_active, 
-               saturated_count, saturation_ratio * 100.0f, coherence);
-        fprintf(stderr, "[PARAMS] decay=%.3f sat=%.1f\n", decay, saturation);
+               saturated_count, saturation_ratio * 100.0f);
     }
+    
+    free(new_act);
 }
 
 /* ========================================================================
@@ -597,15 +659,12 @@ void emit_output() {
     uint8_t output[1048576];
     uint32_t output_len = 0;
     
-    // Read output thresholds from graph
-    float output_min = read_param("_output_min", 0.001f);
-    float output_max = read_param("_output_max", 0.99f);
+    // Fixed thresholds (for now)
+    float output_min = 0.01f;
+    float output_max = 0.99f;
     
-    // Output nodes activated above threshold (but not direct input or control nodes)
+    // Output nodes activated above threshold (but not direct input)
     for (uint32_t i = 0; i < g.node_count; i++) {
-        // Skip control nodes (start with '_')
-        if (g.nodes[i].token_len > 0 && g.nodes[i].token[0] == '_') continue;
-        
         // Must be activated, but not at full strength (those are direct input)
         if (g.nodes[i].activation > output_min && 
             g.nodes[i].activation < output_max) {
@@ -778,9 +837,12 @@ int main() {
         g.edge_count = header[2];
         g.edge_cap = header[3];
         
-        size_t node_section = sizeof(uint32_t) * 4 + (size_t)g.node_cap * sizeof(Node);
-        g.nodes = (Node *)((char *)mmap_base + sizeof(uint32_t) * 4);
-        g.edges = (Edge *)((char *)mmap_base + node_section);
+        // Calculate section offsets
+        size_t header_size = sizeof(uint32_t) * 4;
+        size_t node_section_size = (size_t)g.node_cap * sizeof(Node);
+        
+        g.nodes = (Node *)((char *)mmap_base + header_size);
+        g.edges = (Edge *)((char *)mmap_base + header_size + node_section_size);
         
         if (debug) {
             fprintf(stderr, "[LOAD] %u/%u nodes, %u/%u edges (%.1f MB)\n", 
@@ -834,10 +896,48 @@ int main() {
     // Rebuild hash table from existing edges (if loading)
     if (exists && g.edge_count > 0) {
         if (debug) fprintf(stderr, "[HASH] Rebuilding from %u edges...\n", g.edge_count);
+        
+        // Grow hash table if needed for large graphs
+        while (g.edge_count > g.edge_hash_size / 2) {
+            uint32_t new_size = g.edge_hash_size * 2;
+            EdgeHashEntry *new_hash = calloc(new_size, sizeof(EdgeHashEntry));
+            if (!new_hash) break;  // Out of memory, keep old size
+            
+            free(g.edge_hash);
+            g.edge_hash = new_hash;
+            g.edge_hash_size = new_size;
+            
+            if (debug) fprintf(stderr, "[HASH] Grew to %u buckets\n", new_size);
+        }
+        
         for (uint32_t i = 0; i < g.edge_count; i++) {
-            edge_hash_insert(i);
+            // Validate edge before inserting
+            if (g.edges[i].from < g.node_count && g.edges[i].to < g.node_count) {
+                edge_hash_insert(i);
+            } else {
+                fprintf(stderr, "[WARN] Invalid edge %u: %u→%u (nodes=%u)\n",
+                       i, g.edges[i].from, g.edges[i].to, g.node_count);
+            }
         }
         if (debug) fprintf(stderr, "[HASH] Complete\n");
+        
+        // BOOTSTRAP SELF-OPTIMIZATION: Large graphs prune themselves on wake-up!
+        if (g.edge_count > 50000) {
+            fprintf(stderr, "[BOOTSTRAP] Large graph (%u edges), self-optimizing...\n", g.edge_count);
+            
+            // Clear activations
+            for (uint32_t i = 0; i < g.node_count; i++) {
+                g.nodes[i].activation = 0.0f;
+            }
+            
+            // Prune weak edges immediately
+            uint32_t before = g.edge_count;
+            prune_weak_edges();
+            compact_edges();
+            
+            fprintf(stderr, "[BOOTSTRAP] Pruned %u→%u edges (%.1f%% removed)\n",
+                   before, g.edge_count, 100.0f * (before - g.edge_count) / before);
+        }
     }
     
     // NO PARAMETERS - Pure emergence
@@ -854,9 +954,24 @@ int main() {
         if (n > 0) {
             sense_input(input, n);       // Parse input + fit to patterns + create edges
             spreading_activation();      // CASCADE through the network!
+            strengthen_active_edges();   // SELF-OPT: Boost edges that just fired
             emit_output();               // Show activated nodes
             g.tick++;
             idle = 0;
+            
+            // SELF-OPTIMIZATION: Graph fixes its own performance issues
+            if (g.tick % 10 == 0) {
+                prune_weak_edges();      // Remove edges that never fire
+            }
+            
+            if (g.tick % 100 == 0) {
+                compact_edges();          // Actually delete pruned edges
+                
+                if (debug) {
+                    fprintf(stderr, "[SELF-OPT] tick=%llu nodes=%u edges=%u\n",
+                           g.tick, g.node_count, g.edge_count);
+                }
+            }
         } else {
             idle++;
             usleep(10000);
