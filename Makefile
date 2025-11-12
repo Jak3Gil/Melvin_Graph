@@ -1,48 +1,23 @@
-# Makefile for Melvin - All-in-one melvin_core.c
+# Makefile for Melvin Organic - Intelligence from Simple Rules
 
 CC = gcc
 CFLAGS = -O2 -Wall -Wextra -std=c99
 LDFLAGS = -lm -pthread
 
-# Default: build melvin_core (does everything - bootstrap, runtime, inspect)
-all: melvin_core inspect_program melvin melvin_compute melvin_organic
-
-# Main binary (auto-bootstraps if graph.mmap missing, accepts all commands)
-melvin_core: melvin_core.c
-	$(CC) $(CFLAGS) -o melvin_core melvin_core.c $(LDFLAGS)
-
-# Spreading activation network (simple associative memory)
-melvin: melvin.c
-	$(CC) $(CFLAGS) -o melvin melvin.c $(LDFLAGS)
-
-# Computational spreading activation (self-arranging computation)
-melvin_compute: melvin_compute.c
-	$(CC) $(CFLAGS) -o melvin_compute melvin_compute.c $(LDFLAGS)
+# Default: build melvin_organic
+all: melvin_organic
 
 # Organic learning (pattern-based, no frequency counting)
 melvin_organic: melvin_organic.c
 	$(CC) $(CFLAGS) -o melvin_organic melvin_organic.c $(LDFLAGS)
 
-# Program inspector (views graph as compiled code)
-inspect_program: inspect_program.c
-	$(CC) $(CFLAGS) -o inspect_program inspect_program.c $(LDFLAGS)
-
-# Emergence system - Pure brain-like learning (information in connections)
-melvin_emergence: melvin_emergence.c
-	$(CC) $(CFLAGS) -o melvin_emergence melvin_emergence.c $(LDFLAGS)
-
-# Optional: Minimal VM (separate lightweight implementation)
-melvin_vm: melvin_vm.c
-	$(CC) $(CFLAGS) -o melvin_vm melvin_vm.c $(LDFLAGS)
-
 clean:
-	rm -f melvin_vm melvin_core melvin_emergence inspect_program melvin melvin_compute melvin_organic graph.mmap graph_emergence.mmap compute.mmap organic.mmap nodes.bin edges.bin
+	rm -f melvin_organic organic.mmap
 
-run: melvin_core
-	./melvin_core
+run: melvin_organic
+	./demo_organic.sh
 
 debug: CFLAGS = -g -Wall -Wextra -std=c99
-debug: melvin_core
+debug: melvin_organic
 
 .PHONY: all clean run debug
-
