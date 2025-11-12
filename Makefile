@@ -5,11 +5,19 @@ CFLAGS = -O2 -Wall -Wextra -std=c99
 LDFLAGS = -lm -pthread
 
 # Default: build melvin_core (does everything - bootstrap, runtime, inspect)
-all: melvin_core inspect_program
+all: melvin_core inspect_program melvin melvin_compute
 
 # Main binary (auto-bootstraps if graph.mmap missing, accepts all commands)
 melvin_core: melvin_core.c
 	$(CC) $(CFLAGS) -o melvin_core melvin_core.c $(LDFLAGS)
+
+# Spreading activation network (simple associative memory)
+melvin: melvin.c
+	$(CC) $(CFLAGS) -o melvin melvin.c $(LDFLAGS)
+
+# Computational spreading activation (self-arranging computation)
+melvin_compute: melvin_compute.c
+	$(CC) $(CFLAGS) -o melvin_compute melvin_compute.c $(LDFLAGS)
 
 # Program inspector (views graph as compiled code)
 inspect_program: inspect_program.c
@@ -24,7 +32,7 @@ melvin_vm: melvin_vm.c
 	$(CC) $(CFLAGS) -o melvin_vm melvin_vm.c $(LDFLAGS)
 
 clean:
-	rm -f melvin_vm melvin_core melvin_emergence inspect_program graph.mmap graph_emergence.mmap nodes.bin edges.bin
+	rm -f melvin_vm melvin_core melvin_emergence inspect_program melvin melvin_compute graph.mmap graph_emergence.mmap compute.mmap nodes.bin edges.bin
 
 run: melvin_core
 	./melvin_core

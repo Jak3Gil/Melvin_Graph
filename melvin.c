@@ -33,6 +33,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <math.h>
 
 /* ========================================================================
  * CORE STRUCTURES
@@ -46,12 +47,11 @@ typedef struct __attribute__((packed)) {
     uint16_t frequency;    // 2 bytes - usage count (0-65K)
 } Node;
 
-// 10-byte edge (compact!)
+// 9-byte edge (compact!)
 typedef struct __attribute__((packed)) {
     uint32_t from;         // 4 bytes - source node
     uint32_t to;           // 4 bytes - target node
     uint8_t weight;        // 1 byte - connection strength (0-255)
-    uint8_t times_fired;   // 1 byte - usage count (0-255, wraps)
 } Edge;
 
 // Edge hash table for O(1) lookups (transient, not persisted)
@@ -73,11 +73,6 @@ typedef struct {
     uint32_t edge_hash_size;   // Dynamic hash table size
     
     uint64_t tick;
-    
-    // Spreading activation params
-    float decay_factor;    // How much activation decays per hop
-    uint32_t max_hops;     // How far to propagate
-    float min_activation;  // Cutoff threshold
 } Graph;
 
 Graph g;
@@ -286,7 +281,6 @@ uint32_t create_edge(uint32_t from, uint32_t to, uint8_t weight) {
     g.edges[id].from = from;
     g.edges[id].to = to;
     g.edges[id].weight = weight;
-    g.edges[id].times_fired = 0;
     
     // Insert into hash table
     edge_hash_insert(id);
@@ -303,8 +297,12 @@ uint32_t create_edge(uint32_t from, uint32_t to, uint8_t weight) {
  * ======================================================================== */
 
 void sense_input(uint8_t *bytes, uint32_t len) {
-    // Clear previous activation
+    // Clear previous activation (but preserve control nodes!)
     for (uint32_t i = 0; i < g.node_count; i++) {
+        // Don't reset control nodes (they store persistent parameters)
+        if (g.nodes[i].token_len > 0 && g.nodes[i].token[0] == '_') {
+            continue;  // Preserve control node values
+        }
         g.nodes[i].activation = 0.0f;
     }
     
@@ -381,65 +379,150 @@ void sense_input(uint8_t *bytes, uint32_t len) {
 }
 
 /* ========================================================================
- * SPREADING ACTIVATION: Propagate through the network!
+ * SELF-INTERPRETING GRAPH: Graph controls its own behavior
+ * ======================================================================== */
+
+// Find or create a control node (parameters stored as nodes)
+uint32_t get_control_node(const char *name, float default_value) {
+    // Search for existing control node
+    for (uint32_t i = 0; i < g.node_count; i++) {
+        if (g.nodes[i].token_len == strlen(name)) {
+            int match = 1;
+            for (uint32_t j = 0; j < strlen(name); j++) {
+                if (g.nodes[i].token[j] != name[j]) {
+                    match = 0;
+                    break;
+                }
+            }
+            if (match) return i;
+        }
+    }
+    
+    // Create new control node with default value
+    uint32_t id = create_node((uint8_t *)name, strlen(name));
+    g.nodes[id].activation = default_value;
+    
+    if (debug) {
+        fprintf(stderr, "[CONTROL] Created parameter '%s' = %.2f\n", name, default_value);
+    }
+    
+    return id;
+}
+
+// Read parameter value from graph (NO LIMITS!)
+float read_param(const char *name, float default_value) {
+    uint32_t node = get_control_node(name, default_value);
+    return g.nodes[node].activation;
+}
+
+// Adjust parameter based on outcome (NO LIMITS!)
+void adjust_param(const char *name, float delta) {
+    uint32_t node = get_control_node(name, 1.0f);
+    g.nodes[node].activation += delta;
+    
+    if (debug) {
+        fprintf(stderr, "[ADJUST] %s → %.3f\n", name, g.nodes[node].activation);
+    }
+}
+
+/* ========================================================================
+ * SPREADING ACTIVATION: Graph determines its own dynamics!
  * ======================================================================== */
 
 void spreading_activation() {
     if (debug) fprintf(stderr, "[SPREAD] Starting propagation...\n");
     
-    uint32_t activated_count = 0;
-    uint32_t initial_active = 0;
+    // READ ALL PARAMETERS FROM GRAPH
+    float decay = read_param("_decay", 0.9f);
+    float saturation = read_param("_saturation", 5.0f);
+    float max_iters = read_param("_max_iterations", 50.0f);
+    float convergence_threshold = read_param("_convergence_threshold", 0.001f);
+    float input_threshold = read_param("_input_threshold", 0.99f);
+    float active_threshold = read_param("_active_threshold", 0.001f);
     
-    // Count initially active nodes
+    // Count initial active (using graph threshold)
+    uint32_t initial_active = 0;
     for (uint32_t i = 0; i < g.node_count; i++) {
-        if (g.nodes[i].activation > 0.99f) initial_active++;
+        if (g.nodes[i].activation > input_threshold) initial_active++;
     }
     
-    // PROPAGATE through edges (multiple hops)
-    for (uint32_t hop = 0; hop < g.max_hops; hop++) {
-        int any_activated = 0;
+    // Spread using ALL graph-determined parameters
+    uint32_t iterations = 0;
+    uint32_t saturated_count = 0;
+    int converged = 0;
+    
+    while (iterations < (uint32_t)max_iters) {
+        iterations++;
+        float max_change = 0.0f;
+        saturated_count = 0;
         
-        // Fire all edges where source is active
+        float *new_act = calloc(g.node_count, sizeof(float));
+        
+        for (uint32_t i = 0; i < g.node_count; i++) {
+            new_act[i] = g.nodes[i].activation;
+        }
+        
+        // Spread through edges
         for (uint32_t e = 0; e < g.edge_count; e++) {
             Edge *edge = &g.edges[e];
             Node *from = &g.nodes[edge->from];
-            Node *to = &g.nodes[edge->to];
             
-            // Source must be active
-            if (from->activation < g.min_activation) continue;
-            
-            // COHERENCE: edges that fired more = stronger co-activation affinity
-            // This makes frequently co-occurring patterns naturally boost each other
-            float coherence_boost = 1.0f + (edge->times_fired / 100.0f);  // Soft boost
-            if (coherence_boost > 2.0f) coherence_boost = 2.0f;  // Cap at 2x
-            
-            // Propagate activation through edge with coherence
-            float new_activation = from->activation * 
-                                   (edge->weight / 255.0f) *
-                                   g.decay_factor *
-                                   coherence_boost;  // Frequently co-activated = stronger!
-            
-            if (new_activation > to->activation) {
-                to->activation = new_activation;
-                edge->times_fired++;  // Track co-activation
-                any_activated = 1;
-                activated_count++;
+            if (from->activation > 0.0f) {
+                float propagated = from->activation * (edge->weight / 255.0f) * decay;
+                new_act[edge->to] += propagated;
             }
         }
         
-        if (!any_activated) break;  // No more propagation possible
+        // Apply saturation
+        for (uint32_t i = 0; i < g.node_count; i++) {
+            if (new_act[i] > saturation) {
+                new_act[i] = saturation;
+                saturated_count++;
+            }
+            
+            float change = fabs(new_act[i] - g.nodes[i].activation);
+            if (change > max_change) max_change = change;
+            
+            g.nodes[i].activation = new_act[i];
+        }
+        
+        free(new_act);
+        
+        // Check convergence (using graph threshold)
+        if (max_change < convergence_threshold) {
+            converged = 1;
+            break;
+        }
     }
     
-    // Count final active nodes
+    // Count final active (using graph threshold)
     uint32_t final_active = 0;
     for (uint32_t i = 0; i < g.node_count; i++) {
-        if (g.nodes[i].activation > g.min_activation) final_active++;
+        if (g.nodes[i].activation > active_threshold) final_active++;
+    }
+    
+    // MINIMAL SELF-ADJUSTMENT - just detect problems, don't force solutions
+    // Let the graph figure out the right adjustments through structure
+    
+    float saturation_ratio = (float)saturated_count / (float)g.node_count;
+    
+    if (saturation_ratio > 0.5f && decay < 1.0f) {
+        // Too much saturation - try reducing decay slightly
+        adjust_param("_decay", -0.01f);
+        if (debug) fprintf(stderr, "[ADJUST] High saturation, reducing decay\n");
+    }
+    
+    if (final_active <= initial_active && decay > 0.5f) {
+        // No cascade - try reducing decay to spread more
+        adjust_param("_decay", -0.02f);
+        if (debug) fprintf(stderr, "[ADJUST] No cascade, reducing decay\n");
     }
     
     if (debug) {
-        fprintf(stderr, "[SPREAD] %u input nodes → %u activated nodes (%.1fx cascade!)\n",
-               initial_active, final_active, 
-               initial_active > 0 ? (float)final_active / initial_active : 0.0f);
+        fprintf(stderr, "[SPREAD] %u iters, %u→%u nodes, %u sat (%.1f%%)\n",
+               iterations, initial_active, final_active, 
+               saturated_count, saturation_ratio * 100.0f);
+        fprintf(stderr, "[PARAMS] decay=%.3f sat=%.1f\n", decay, saturation);
     }
 }
 
@@ -451,11 +534,18 @@ void emit_output() {
     uint8_t output[1048576];
     uint32_t output_len = 0;
     
-    // Output nodes activated above threshold (but not direct input)
+    // Read output thresholds from graph
+    float output_min = read_param("_output_min", 0.001f);
+    float output_max = read_param("_output_max", 0.99f);
+    
+    // Output nodes activated above threshold (but not direct input or control nodes)
     for (uint32_t i = 0; i < g.node_count; i++) {
+        // Skip control nodes (start with '_')
+        if (g.nodes[i].token_len > 0 && g.nodes[i].token[0] == '_') continue;
+        
         // Must be activated, but not at full strength (those are direct input)
-        if (g.nodes[i].activation > g.min_activation && 
-            g.nodes[i].activation < 0.99f) {
+        if (g.nodes[i].activation > output_min && 
+            g.nodes[i].activation < output_max) {
             
             for (uint32_t b = 0; b < g.nodes[i].token_len; b++) {
                 if (output_len < sizeof(output)) {
@@ -562,10 +652,8 @@ int main() {
         if (debug) fprintf(stderr, "[HASH] Complete\n");
     }
     
-    // Spreading activation parameters
-    g.decay_factor = 0.8f;      // 80% of activation passes through
-    g.max_hops = 10;            // Up to 10 hops of propagation
-    g.min_activation = 0.01f;   // 1% threshold
+    // NO PARAMETERS - Pure emergence
+    // Graph structure determines all dynamics
     
     fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
     
@@ -608,5 +696,6 @@ int main() {
     
     return 0;
 }
+
 
 

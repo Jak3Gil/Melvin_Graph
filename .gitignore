@@ -21,3 +21,7 @@ edges.bin
 __pycache__/
 *.pyc
 
+*.mmap
+melvin
+melvin_compute
+show_activations
