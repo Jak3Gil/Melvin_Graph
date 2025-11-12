@@ -34,6 +34,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <math.h>
+#include <time.h>
 
 /* ========================================================================
  * CORE STRUCTURES
@@ -565,11 +566,136 @@ void emit_output() {
 }
 
 /* ========================================================================
+ * SELF-PROMPTING: Melvin thinks continuously
+ * ======================================================================== */
+
+void self_prompt() {
+    // Pick random activated nodes and re-activate them as "internal thoughts"
+    // This creates continuous mutation and exploration
+    
+    if (g.node_count < 2) return;  // Need some nodes to think about
+    
+    float mutation_rate = read_param("_mutation_rate", 0.1f);
+    float thought_strength = read_param("_thought_strength", 0.5f);
+    
+    // Find currently activated nodes (above threshold)
+    uint32_t activated[1000];
+    uint32_t activated_count = 0;
+    
+    for (uint32_t i = 0; i < g.node_count && activated_count < 1000; i++) {
+        // Skip control nodes
+        if (g.nodes[i].token_len > 0 && g.nodes[i].token[0] == '_') continue;
+        
+        if (g.nodes[i].activation > 0.01f) {
+            activated[activated_count++] = i;
+        }
+    }
+    
+    // If nothing activated, pick random nodes to "think about"
+    if (activated_count == 0) {
+        for (uint32_t i = 0; i < 5 && i < g.node_count; i++) {
+            uint32_t rand_idx = rand() % g.node_count;
+            // Skip control nodes
+            if (g.nodes[rand_idx].token_len > 0 && g.nodes[rand_idx].token[0] == '_') continue;
+            activated[activated_count++] = rand_idx;
+        }
+    }
+    
+    if (activated_count == 0) return;
+    
+    // Re-activate some of them as "internal thoughts"
+    uint32_t num_thoughts = (uint32_t)(activated_count * mutation_rate);
+    if (num_thoughts < 1) num_thoughts = 1;
+    
+    for (uint32_t i = 0; i < num_thoughts && i < activated_count; i++) {
+        uint32_t thought_idx = activated[rand() % activated_count];
+        g.nodes[thought_idx].activation += thought_strength;
+        
+        if (debug) {
+            uint32_t print_len = (g.nodes[thought_idx].token_len < 16) ? 
+                                  g.nodes[thought_idx].token_len : 16;
+            fprintf(stderr, "[THOUGHT] '%.*s' (act=%.2f)\n", 
+                   print_len, g.nodes[thought_idx].token, 
+                   g.nodes[thought_idx].activation);
+        }
+    }
+}
+
+void mutate_graph() {
+    // Create random new edges between activated nodes
+    // This is how Melvin "discovers" new patterns through exploration
+    
+    if (g.node_count < 3) return;
+    
+    float mutation_rate = read_param("_mutation_rate", 0.1f);
+    
+    // Find activated nodes
+    uint32_t activated[1000];
+    uint32_t activated_count = 0;
+    
+    for (uint32_t i = 0; i < g.node_count && activated_count < 1000; i++) {
+        // Skip control nodes
+        if (g.nodes[i].token_len > 0 && g.nodes[i].token[0] == '_') continue;
+        
+        if (g.nodes[i].activation > 0.01f) {
+            activated[activated_count++] = i;
+        }
+    }
+    
+    if (activated_count < 2) return;
+    
+    // Create random edges between activated nodes
+    uint32_t num_mutations = (uint32_t)(activated_count * mutation_rate);
+    if (num_mutations < 1) num_mutations = 1;
+    
+    for (uint32_t i = 0; i < num_mutations; i++) {
+        uint32_t from = activated[rand() % activated_count];
+        uint32_t to = activated[rand() % activated_count];
+        
+        if (from != to) {
+            create_edge(from, to, 50);  // Weak exploratory edge
+            
+            if (debug) {
+                fprintf(stderr, "[MUTATE] edge %u→%u\n", from, to);
+            }
+        }
+    }
+}
+
+void explore_parameters() {
+    // Randomly adjust parameters to explore behavior space
+    // This is self-modification - Melvin experimenting with its own dynamics
+    
+    float exploration_rate = read_param("_exploration_rate", 0.01f);
+    
+    // Randomly adjust decay
+    if ((rand() % 100) < (int)(exploration_rate * 100.0f)) {
+        float delta = ((rand() % 100) / 1000.0f) - 0.05f;  // -0.05 to +0.05
+        adjust_param("_decay", delta);
+    }
+    
+    // Randomly adjust saturation
+    if ((rand() % 100) < (int)(exploration_rate * 100.0f)) {
+        float delta = ((rand() % 100) / 100.0f) - 0.5f;  // -0.5 to +0.5
+        adjust_param("_saturation", delta);
+    }
+    
+    // Randomly adjust mutation rate
+    if ((rand() % 100) < (int)(exploration_rate * 100.0f)) {
+        float delta = ((rand() % 100) / 2000.0f) - 0.025f;  // -0.025 to +0.025
+        adjust_param("_mutation_rate", delta);
+    }
+}
+
+/* ========================================================================
  * MAIN
  * ======================================================================== */
 
 int main() {
     if (getenv("MELVIN_DEBUG")) debug = 1;
+    
+    // Initialize random seed for self-prompting
+    srand(time(NULL));
     
     // UNLIMITED: Start tiny, auto-grow as needed (like melvin_core.c)
     uint32_t initial_nodes = 256;       // Start: 256 nodes (6 KB)
