@@ -5,11 +5,15 @@ CFLAGS = -O2 -Wall -Wextra -std=c99
 LDFLAGS = -lm -pthread
 
 # Default: build melvin_organic
-all: melvin_organic
+all: melvin_organic melvin_computational
 
 # Organic learning (pattern-based, no frequency counting)
 melvin_organic: melvin_organic.c
 	$(CC) $(CFLAGS) -o melvin_organic melvin_organic.c $(LDFLAGS)
+
+# Computational learning (nodes execute, edges route)
+melvin_computational: melvin_computational.c
+	$(CC) $(CFLAGS) -o melvin_computational melvin_computational.c $(LDFLAGS)
 
 clean:
 	rm -f melvin_organic organic.mmap
