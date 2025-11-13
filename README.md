@@ -388,63 +388,76 @@ This IS addition. Pure structure.
 
 ## Summary
 
-### What Melvin Is:
+### What Melvin IS:
 
-**A minimal substrate** where circuits are data, not code.
+**Universal substrate** - numbers and words use identical mechanisms.
 
-**280 lines of C:**
-- Parse text → tokens
-- Tokens → nodes
-- Sequence → edges  
-- Query → follow edges
-- Save/load graph
+**~450 lines of C:**
+- Parse, create nodes/edges, route through graph
+- Addition via bit patterns (8 nodes, routes through them)
+- Multiplication via addition loops (composes circuits!)
+- Evolution framework (random mutations)
 
 **melvin.mmap:**
-- All circuits (addition, multiplication, sequences)
-- All data (whatever you fed)
-- All connections (edges)
+- Bit patterns (0+0+0 → 0,0, universal arithmetic)
+- Numbers (decompose to bits automatically)
+- Words (sequences, bridges, any patterns)
+- Computed results (cached)
 
-### What Really Happens When You Feed Raw Data:
+### How It Actually Works:
 
+**Addition** (real computation):
 ```
-Input: "cat sat mat"
-  ↓
-1. Split: [cat] [sat] [mat]
-2. Create nodes: cat, sat, mat
-3. Create edges: cat→sat, sat→mat
-4. Save to disk
-
-That's it. No intelligence. Just storage.
+5 + 7 →  breaks to bits → routes through patterns → computes 12
+6 + 8 →  routes through SAME patterns → computes 14
+(Never taught 6+8, it COMPUTED it!)
 ```
 
-### The Key Discovery:
-
-**You can build circuits by feeding patterns:**
-```bash
-echo "2*3 6" | ./melvin     # Multiplication
-echo "5+7 12" | ./melvin    # Addition patterns
-echo "cat sat mat" | ./melvin  # Sequences
+**Multiplication** (composes addition):
+```
+5 * 3 → shift-and-add → uses addition circuit 2 times → 15
+(Built from addition, no new primitive!)
 ```
 
-All become graph structure. No C changes needed.
+**Words** (same routing):
+```
+cat sat mat → creates edges → query cat → routes to sat
+(Identical mechanism to arithmetic!)
+```
 
-### What's Missing for Emergence:
+### The Unification:
 
-The graph stores patterns but **doesn't discover them**.
+**Everything is routing through nodes/edges:**
+- cat → sat (follow 1 edge)
+- 5 + 7 → 12 (route through 32 bit patterns)
+- five → 5 (bridge word to number)
 
-For emergence, we need circuits that:
-- Detect similarity (cat~bat)
-- Create edges when detected
-- Find structural patterns (A→B→C)
-- Modify themselves
-- Evaluate what works
-- Recursively improve
+**Same substrate. No domain boundaries.**
 
-**These circuits must be built from data, not coded in C.**
+### Evolution (NEW!):
 
-Current: We haven't figured out how to feed data that creates these meta-circuits.
+```c
+evolve() {
+    Pick random nodes a, b
+    Create edge a → b
+    Graph mutates!
+}
+```
 
-That's the challenge
+After each operation, graph can mutate.  
+Over time: useful connections emerge.  
+Natural selection in graph space.
+
+### Current State:
+
+✓ Circuits work (add, multiply, words)  
+✓ Universal substrate (same for all data)  
+✓ Evolution framework exists  
+✗ Evaluation missing (which mutations help?)  
+✗ Not yet emergent (needs fitness function)
+
+The substrate is complete.  
+Evolution can begin.
 
 ---
 
